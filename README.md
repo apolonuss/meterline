@@ -78,13 +78,27 @@ meterline support
 
 ## TUI Controls
 
+- `o` connects OpenAI with an API key stored in the OS keychain.
+- `c` connects Claude with an Anthropic Admin API key stored in the OS keychain.
+- `r` runs a manual provider sync.
+- `v` toggles live refresh, which polls official authenticated usage APIs every 60 seconds when providers are connected.
+- `g` opens Settings.
 - `m` toggles minimized mode.
-- `s` hides or shows usage values for privacy.
-- `t` cycles the compact tray metric in the logo and footer.
-- `h`/`l`, left/right, or `1`-`6` switch panels.
+- `s` hides or shows usage values for privacy and saves the preference.
+- `t` cycles the compact tray metric and saves the preference.
+- `h`/`l`, left/right, or `1`-`7` switch panels.
 - `q` quits.
 
 Meterline stays terminal-native in v1. The tray is a compact in-terminal status strip rather than an operating-system system tray process, which keeps installation light and predictable across Windows, macOS, and Linux.
+
+## Customization
+
+Open the Settings panel with `g`. Meterline saves simple preferences to `settings.json` in the local data directory:
+
+- Theme: `balanced`, `openai`, `claude`, or `mono`.
+- Manual sync window: `7`, `31`, or `90` days.
+- Startup panel: `home`, `providers`, `chats`, or `imports`.
+- Value privacy, default tray metric, and live refresh on/off.
 
 ## Storage and Privacy
 
@@ -103,3 +117,5 @@ Set `METERLINE_HOME` to override the app data directory, which is useful for tes
 ## Provider Notes
 
 OpenAI usage sync expects an API key with access to organization usage and costs. Anthropic usage sync expects an Admin API key beginning with `sk-ant-admin...`; individual Claude users can still import official Claude data exports.
+
+Live refresh uses official authenticated API polling. It does not use provider web sessions, passwords, scraping, or local webhooks. Provider reporting can lag behind actual usage, so Meterline shows the last refresh time in the TUI.

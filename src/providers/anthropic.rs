@@ -15,11 +15,31 @@ pub fn sync(store: &mut Store, api_key: &str, days: i64) -> Result<SyncReport> {
         .user_agent("Meterline/0.1.0")
         .build()
         .context("could not create HTTP client")?;
-    let end = Utc::now();
-    let start = end - Duration::days(days.clamp(1, 31));
+
+    let (start, end) = sync_window(days);
+    let mut usage = Vec::new();
+    let mut costs = Vec::new();
+    for (chunk_start, chunk_end) in daily_chunks(start, end) {
+        usage.extend(fetch_usage(&client, api_key, chunk_start, chunk_end)?);
+        costs.extend(fetch_costs(&client, api_key, chunk_start, chunk_end)?);
+    }
+
+    let usage_rows = store.insert_usage_buckets(&usage)?;
+    let cost_rows = store.insert_cost_buckets(&costs)?;
+    Ok(SyncReport {
+        usage_rows,
+        cost_rows,
+    })
+}
+
+fn fetch_usage(
+    client: &Client,
+    api_key: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<UsageBucket>> {
     let starting_at = start.to_rfc3339();
     let ending_at = end.to_rfc3339();
-
     let usage_json: Value = client
         .get(format!("{BASE_URL}/usage_report/messages"))
         .header("x-api-key", api_key)
@@ -37,7 +57,17 @@ pub fn sync(store: &mut Store, api_key: &str, days: i64) -> Result<SyncReport> {
         .context("Anthropic usage request was rejected")?
         .json()
         .context("Anthropic usage response was not JSON")?;
+    Ok(parse_usage(&usage_json))
+}
 
+fn fetch_costs(
+    client: &Client,
+    api_key: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<CostBucket>> {
+    let starting_at = start.to_rfc3339();
+    let ending_at = end.to_rfc3339();
     let cost_json: Value = client
         .get(format!("{BASE_URL}/cost_report"))
         .header("x-api-key", api_key)
@@ -54,15 +84,7 @@ pub fn sync(store: &mut Store, api_key: &str, days: i64) -> Result<SyncReport> {
         .context("Anthropic cost request was rejected")?
         .json()
         .context("Anthropic cost response was not JSON")?;
-
-    let usage = parse_usage(&usage_json);
-    let costs = parse_costs(&cost_json);
-    let usage_rows = store.insert_usage_buckets(&usage)?;
-    let cost_rows = store.insert_cost_buckets(&costs)?;
-    Ok(SyncReport {
-        usage_rows,
-        cost_rows,
-    })
+    Ok(parse_costs(&cost_json))
 }
 
 pub fn parse_usage(value: &Value) -> Vec<UsageBucket> {
@@ -150,8 +172,35 @@ pub fn parse_costs(value: &Value) -> Vec<CostBucket> {
 
 fn anthropic_bucket_times(value: &Value) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     let start = parse_time(value.get("starting_at")?.as_str()?)?;
-    let end = parse_time(value.get("ending_at")?.as_str()?)?;
-    Some((start, end))
+    let start = day_start(start);
+    Some((start, start + Duration::days(1)))
+}
+
+fn sync_window(days: i64) -> (DateTime<Utc>, DateTime<Utc>) {
+    let end = Utc::now();
+    let start = day_start(end) - Duration::days(days.clamp(1, 90) - 1);
+    (start, end)
+}
+
+fn daily_chunks(start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    let mut chunks = Vec::new();
+    let mut cursor = start;
+    while cursor < end {
+        let next = (cursor + Duration::days(31)).min(end);
+        chunks.push((cursor, next));
+        cursor = next;
+    }
+    chunks
+}
+
+fn day_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_naive_utc_and_offset(
+        value
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight is valid"),
+        Utc,
+    )
 }
 
 fn parse_time(value: &str) -> Option<DateTime<Utc>> {
@@ -174,6 +223,7 @@ fn string_or_none(value: Option<&Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use serde_json::json;
 
     #[test]
@@ -217,5 +267,13 @@ mod tests {
         let buckets = parse_costs(&value);
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].amount, 123.78912);
+    }
+
+    #[test]
+    fn chunks_long_sync_windows() {
+        let end = Utc.with_ymd_and_hms(2026, 4, 26, 12, 0, 0).unwrap();
+        let start = end - Duration::days(89);
+        let chunks = daily_chunks(day_start(start), end);
+        assert_eq!(chunks.len(), 3);
     }
 }

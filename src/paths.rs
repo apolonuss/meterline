@@ -37,6 +37,10 @@ impl AppPaths {
         self.data_dir.join("meterline.sqlite3")
     }
 
+    pub fn settings_path(&self) -> PathBuf {
+        self.data_dir.join("settings.json")
+    }
+
     pub fn ensure(&self) -> Result<()> {
         std::fs::create_dir_all(&self.data_dir)
             .with_context(|| format!("could not create {}", self.data_dir.display()))

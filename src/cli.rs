@@ -77,6 +77,13 @@ pub fn run_cli(cli: Cli) -> Result<()> {
         .map(Ok)
         .unwrap_or_else(AppPaths::discover)?;
     paths.ensure()?;
+    if let Some(Command::Paths) = &cli.command {
+        println!("data: {}", paths.data_dir().display());
+        println!("database: {}", paths.database_path().display());
+        println!("settings: {}", paths.settings_path().display());
+        return Ok(());
+    }
+
     let db_key = if cfg!(feature = "encrypted-storage") {
         SecretStore::database_key()?
     } else {
@@ -135,12 +142,9 @@ pub fn run_cli(cli: Cli) -> Result<()> {
         Some(Command::Export { format, output }) => {
             export_store(&store, format, output.as_deref())?;
         }
-        Some(Command::Paths) => {
-            println!("data: {}", paths.data_dir().display());
-            println!("database: {}", paths.database_path().display());
-        }
+        Some(Command::Paths) => unreachable!("paths exits before opening local storage"),
         Some(Command::Support) => unreachable!("support exits before opening local storage"),
-        None => crate::tui::run(&store)?,
+        None => crate::tui::run(&mut store, &paths.settings_path())?,
     }
 
     Ok(())

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
@@ -14,11 +14,31 @@ pub fn sync(store: &mut Store, api_key: &str, days: i64) -> Result<SyncReport> {
         .user_agent("Meterline/0.1.0")
         .build()
         .context("could not create HTTP client")?;
-    let end = Utc::now();
-    let start = end - Duration::days(days.clamp(1, 31));
+
+    let (start, end) = sync_window(days);
+    let mut usage = Vec::new();
+    let mut costs = Vec::new();
+    for (chunk_start, chunk_end) in daily_chunks(start, end) {
+        usage.extend(fetch_usage(&client, api_key, chunk_start, chunk_end)?);
+        costs.extend(fetch_costs(&client, api_key, chunk_start, chunk_end)?);
+    }
+
+    let usage_rows = store.insert_usage_buckets(&usage)?;
+    let cost_rows = store.insert_cost_buckets(&costs)?;
+    Ok(SyncReport {
+        usage_rows,
+        cost_rows,
+    })
+}
+
+fn fetch_usage(
+    client: &Client,
+    api_key: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<UsageBucket>> {
     let start_unix = start.timestamp().to_string();
     let end_unix = end.timestamp().to_string();
-
     let usage_json: Value = client
         .get(format!("{BASE_URL}/usage/completions"))
         .bearer_auth(api_key)
@@ -35,7 +55,17 @@ pub fn sync(store: &mut Store, api_key: &str, days: i64) -> Result<SyncReport> {
         .context("OpenAI usage request was rejected")?
         .json()
         .context("OpenAI usage response was not JSON")?;
+    Ok(parse_usage(&usage_json))
+}
 
+fn fetch_costs(
+    client: &Client,
+    api_key: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<CostBucket>> {
+    let start_unix = start.timestamp().to_string();
+    let end_unix = end.timestamp().to_string();
     let cost_json: Value = client
         .get(format!("{BASE_URL}/costs"))
         .bearer_auth(api_key)
@@ -52,15 +82,7 @@ pub fn sync(store: &mut Store, api_key: &str, days: i64) -> Result<SyncReport> {
         .context("OpenAI cost request was rejected")?
         .json()
         .context("OpenAI cost response was not JSON")?;
-
-    let usage = parse_usage(&usage_json);
-    let costs = parse_costs(&cost_json);
-    let usage_rows = store.insert_usage_buckets(&usage)?;
-    let cost_rows = store.insert_cost_buckets(&costs)?;
-    Ok(SyncReport {
-        usage_rows,
-        cost_rows,
-    })
+    Ok(parse_costs(&cost_json))
 }
 
 pub fn parse_usage(value: &Value) -> Vec<UsageBucket> {
@@ -136,13 +158,38 @@ pub fn parse_costs(value: &Value) -> Vec<CostBucket> {
     buckets
 }
 
-fn openai_bucket_times(value: &Value) -> Option<(chrono::DateTime<Utc>, chrono::DateTime<Utc>)> {
+fn openai_bucket_times(value: &Value) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     let start = value.get("start_time").and_then(Value::as_i64)?;
-    let end = value.get("end_time").and_then(Value::as_i64)?;
-    Some((
-        Utc.timestamp_opt(start, 0).single()?,
-        Utc.timestamp_opt(end, 0).single()?,
-    ))
+    let start = Utc.timestamp_opt(start, 0).single()?;
+    let start = day_start(start);
+    Some((start, start + Duration::days(1)))
+}
+
+fn sync_window(days: i64) -> (DateTime<Utc>, DateTime<Utc>) {
+    let end = Utc::now();
+    let start = day_start(end) - Duration::days(days.clamp(1, 90) - 1);
+    (start, end)
+}
+
+fn daily_chunks(start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    let mut chunks = Vec::new();
+    let mut cursor = start;
+    while cursor < end {
+        let next = (cursor + Duration::days(31)).min(end);
+        chunks.push((cursor, next));
+        cursor = next;
+    }
+    chunks
+}
+
+fn day_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_naive_utc_and_offset(
+        value
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight is valid"),
+        Utc,
+    )
 }
 
 fn int_field(value: &Value, name: &str) -> i64 {
@@ -198,5 +245,13 @@ mod tests {
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].amount, 0.06);
         assert_eq!(buckets[0].line_item.as_deref(), Some("Text tokens"));
+    }
+
+    #[test]
+    fn chunks_long_sync_windows() {
+        let end = Utc.with_ymd_and_hms(2026, 4, 26, 12, 0, 0).unwrap();
+        let start = end - Duration::days(89);
+        let chunks = daily_chunks(day_start(start), end);
+        assert_eq!(chunks.len(), 3);
     }
 }
