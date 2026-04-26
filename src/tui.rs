@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -143,6 +143,10 @@ fn run_loop(
         terminal.draw(|frame| render_app(frame, &dashboard, &state, settings_path))?;
         if event::poll(Duration::from_millis(160))? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('m') => state.minimized = !state.minimized,
