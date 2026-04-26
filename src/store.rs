@@ -1,7 +1,11 @@
-use anyhow::{Context, Result, bail};
+#[cfg(feature = "encrypted-storage")]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+#[cfg(feature = "encrypted-storage")]
+use rusqlite::OptionalExtension;
 use rusqlite::types::Type;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use std::path::Path;
 
 use crate::models::{
@@ -21,15 +25,26 @@ impl Store {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("could not open database {}", path.display()))?;
-        conn.pragma_update(None, "key", key)
-            .context("could not set SQLCipher database key")?;
 
-        let cipher_version = conn
-            .query_row("PRAGMA cipher_version;", [], |row| row.get::<_, String>(0))
-            .optional()
-            .context("could not verify SQLCipher support")?;
-        if cipher_version.unwrap_or_default().is_empty() {
-            bail!("Meterline was built without SQLCipher support; encrypted SQLite is required");
+        #[cfg(feature = "encrypted-storage")]
+        {
+            conn.pragma_update(None, "key", key)
+                .context("could not set SQLCipher database key")?;
+
+            let cipher_version = conn
+                .query_row("PRAGMA cipher_version;", [], |row| row.get::<_, String>(0))
+                .optional()
+                .context("could not verify SQLCipher support")?;
+            if cipher_version.unwrap_or_default().is_empty() {
+                bail!(
+                    "Meterline was built without SQLCipher support; encrypted SQLite is required"
+                );
+            }
+        }
+
+        #[cfg(not(feature = "encrypted-storage"))]
+        {
+            let _ = key;
         }
 
         conn.execute_batch(

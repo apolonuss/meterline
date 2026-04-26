@@ -26,7 +26,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Initialize the encrypted local database.
+    /// Initialize the local database.
     Init,
     /// Store a provider key in the OS keychain.
     Connect {
@@ -77,7 +77,11 @@ pub fn run_cli(cli: Cli) -> Result<()> {
         .map(Ok)
         .unwrap_or_else(AppPaths::discover)?;
     paths.ensure()?;
-    let db_key = SecretStore::database_key()?;
+    let db_key = if cfg!(feature = "encrypted-storage") {
+        SecretStore::database_key()?
+    } else {
+        String::new()
+    };
     let mut store = Store::open(&paths.database_path(), &db_key)?;
 
     match cli.command {

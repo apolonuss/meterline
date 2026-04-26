@@ -86,7 +86,13 @@ Meterline stays terminal-native in v1. The tray is a compact in-terminal status 
 
 ## Storage and Privacy
 
-Meterline stores app data in a local SQLCipher-encrypted SQLite database. The database key and provider API keys are stored in the operating system keychain when available.
+Meterline stores app data in a local SQLite database. Provider API keys are stored in the operating system keychain when available.
+
+The default build favors simple installation and portable prebuilt binaries. Advanced users can build with SQLCipher-backed encrypted storage:
+
+```sh
+cargo install --git https://github.com/apolonuss/meterline --locked --no-default-features --features encrypted-storage
+```
 
 Imported chat history is metadata-first in v1. Meterline stores titles, timestamps, provider, model hints, estimated token counts, source hashes, and optional short snippets. It does not store full message bodies.
 

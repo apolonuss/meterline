@@ -19,11 +19,16 @@ rand = "0.8"
 ratatui = "0.29"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rpassword = "7.3"
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "chrono"] }
+rusqlite = { version = "0.32", default-features = false, features = ["chrono"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+[features]
+default = ["portable-storage"]
+portable-storage = ["rusqlite/bundled"]
+encrypted-storage = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 
 [dev-dependencies]
 tempfile = "3.14"
