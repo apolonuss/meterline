@@ -24,6 +24,15 @@ const TABS: [&str; 6] = [
     "Imports",
     "Exports",
 ];
+const TRAY_ITEMS: [&str; 4] = ["Spend", "Tokens", "Chats", "Sync"];
+
+#[derive(Clone, Debug, Default)]
+struct TuiState {
+    selected: usize,
+    tray_item: usize,
+    minimized: bool,
+    hide_values: bool,
+}
 
 pub fn run(store: &Store) -> Result<()> {
     let dashboard = store.dashboard()?;
@@ -48,19 +57,27 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 }
 
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>, dashboard: Dashboard) -> Result<()> {
-    let mut selected = 0usize;
+    let mut state = TuiState::default();
     loop {
-        terminal.draw(|frame| render(frame, &dashboard, selected))?;
+        terminal.draw(|frame| render_app(frame, &dashboard, &state))?;
         if event::poll(Duration::from_millis(160))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Right | KeyCode::Char('l') => selected = (selected + 1) % TABS.len(),
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        selected = selected.checked_sub(1).unwrap_or(TABS.len() - 1)
+                    KeyCode::Char('m') => state.minimized = !state.minimized,
+                    KeyCode::Enter if state.minimized => state.minimized = false,
+                    KeyCode::Char('s') => state.hide_values = !state.hide_values,
+                    KeyCode::Char('t') | KeyCode::Tab => {
+                        state.tray_item = (state.tray_item + 1) % TRAY_ITEMS.len()
                     }
-                    KeyCode::Char(value @ '1'..='6') => {
-                        selected = (value as usize - '1' as usize).min(TABS.len() - 1)
+                    KeyCode::Right | KeyCode::Char('l') if !state.minimized => {
+                        state.selected = (state.selected + 1) % TABS.len()
+                    }
+                    KeyCode::Left | KeyCode::Char('h') if !state.minimized => {
+                        state.selected = state.selected.checked_sub(1).unwrap_or(TABS.len() - 1)
+                    }
+                    KeyCode::Char(value @ '1'..='6') if !state.minimized => {
+                        state.selected = (value as usize - '1' as usize).min(TABS.len() - 1)
                     }
                     _ => {}
                 }
@@ -71,6 +88,19 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>, dashboard: Dashboard) -> Res
 }
 
 pub fn render(frame: &mut Frame<'_>, dashboard: &Dashboard, selected: usize) {
+    let state = TuiState {
+        selected,
+        ..TuiState::default()
+    };
+    render_app(frame, dashboard, &state);
+}
+
+fn render_app(frame: &mut Frame<'_>, dashboard: &Dashboard, state: &TuiState) {
+    if state.minimized {
+        render_minimized(frame, dashboard, state);
+        return;
+    }
+
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -81,20 +111,12 @@ pub fn render(frame: &mut Frame<'_>, dashboard: &Dashboard, selected: usize) {
         ])
         .split(frame.area());
 
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "Meterline",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  usage, costs, models, chats"),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+    let title =
+        Paragraph::new(logo_line(dashboard, state)).block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, outer[0]);
 
     let tabs = Tabs::new(TABS.iter().copied().map(Line::from).collect::<Vec<_>>())
-        .select(selected)
+        .select(state.selected)
         .style(Style::default().fg(Color::Gray))
         .highlight_style(
             Style::default()
@@ -104,20 +126,62 @@ pub fn render(frame: &mut Frame<'_>, dashboard: &Dashboard, selected: usize) {
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(tabs, outer[1]);
 
-    match selected {
-        0 => render_overview(frame, outer[2], dashboard),
-        1 => render_models(frame, outer[2], dashboard),
+    match state.selected {
+        0 => render_overview(frame, outer[2], dashboard, state),
+        1 => render_models(frame, outer[2], dashboard, state),
         2 => render_providers(frame, outer[2], dashboard),
-        3 => render_chats(frame, outer[2], dashboard),
+        3 => render_chats(frame, outer[2], dashboard, state),
         4 => render_imports(frame, outer[2], dashboard),
         _ => render_exports(frame, outer[2]),
     }
 
-    let help = Paragraph::new("q quit  left/right or h/l switch panels  1-6 jump");
+    let help = Paragraph::new(format!(
+        "q quit  m minimize  s {} values  t tray: {}  left/right or h/l switch panels  1-6 jump",
+        if state.hide_values { "show" } else { "hide" },
+        tray_value(dashboard, state).1
+    ));
     frame.render_widget(help, outer[3]);
 }
 
-fn render_overview(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard) {
+fn render_minimized(frame: &mut Frame<'_>, dashboard: &Dashboard, state: &TuiState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(frame.area());
+
+    let (label, value) = tray_value(dashboard, state);
+    let line = Line::from(vec![
+        Span::styled(
+            "[ML] Meterline",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(label, Style::default().fg(Color::Gray)),
+        Span::raw(": "),
+        Span::styled(
+            value,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line).block(Block::default().borders(Borders::ALL)),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new("q quit  m/enter restore  s hide/show values  t cycle tray metric"),
+        chunks[2],
+    );
+}
+
+fn render_overview(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -131,17 +195,20 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard) {
         frame,
         columns[0],
         "Spend",
-        format!("${:.4}", dashboard.total_cost_usd),
+        maybe_hidden(format!("${:.4}", dashboard.total_cost_usd), state),
         "from provider cost APIs",
     );
     stat_card(
         frame,
         columns[1],
         "Tokens",
-        format!(
-            "{} in / {} out",
-            compact_number(dashboard.total_input_tokens),
-            compact_number(dashboard.total_output_tokens)
+        maybe_hidden(
+            format!(
+                "{} in / {} out",
+                compact_number(dashboard.total_input_tokens),
+                compact_number(dashboard.total_output_tokens)
+            ),
+            state,
         ),
         &format!("{} requests", compact_number(dashboard.total_requests)),
     );
@@ -149,7 +216,7 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard) {
         frame,
         columns[2],
         "Chats",
-        dashboard.imported_chats.to_string(),
+        maybe_hidden(dashboard.imported_chats.to_string(), state),
         "metadata imported locally",
     );
 }
@@ -174,15 +241,15 @@ fn stat_card(frame: &mut Frame<'_>, area: Rect, title: &str, value: String, foot
     );
 }
 
-fn render_models(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard) {
+fn render_models(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
     let rows = dashboard.models.iter().map(|model| {
         Row::new(vec![
             Cell::from(model.provider.clone()),
             Cell::from(model.model.clone()),
-            Cell::from(compact_number(model.input_tokens)),
-            Cell::from(compact_number(model.output_tokens)),
-            Cell::from(format!("${:.4}", model.cost_usd)),
-            Cell::from(model.imported_chats.to_string()),
+            Cell::from(maybe_hidden(compact_number(model.input_tokens), state)),
+            Cell::from(maybe_hidden(compact_number(model.output_tokens), state)),
+            Cell::from(maybe_hidden(format!("${:.4}", model.cost_usd), state)),
+            Cell::from(maybe_hidden(model.imported_chats.to_string(), state)),
         ])
     });
     let table = Table::new(
@@ -235,14 +302,15 @@ fn render_providers(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard) {
     frame.render_widget(table, area);
 }
 
-fn render_chats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard) {
+fn render_chats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
     let rows = dashboard.recent_chats.iter().map(|chat| {
         Row::new(vec![
             Cell::from(chat.provider.display_name()),
             Cell::from(chat.title.clone()),
             Cell::from(chat.model.clone().unwrap_or_else(|| "unknown".to_string())),
-            Cell::from(compact_number(
-                chat.estimated_input_tokens + chat.estimated_output_tokens,
+            Cell::from(maybe_hidden(
+                compact_number(chat.estimated_input_tokens + chat.estimated_output_tokens),
+                state,
             )),
         ])
     });
@@ -314,6 +382,69 @@ fn compact_number(value: i64) -> String {
         format!("{:.1}K", value as f64 / 1_000.0)
     } else {
         value.to_string()
+    }
+}
+
+fn logo_line<'a>(dashboard: &Dashboard, state: &TuiState) -> Line<'a> {
+    let (label, value) = tray_value(dashboard, state);
+    Line::from(vec![
+        Span::styled(
+            "[ML]",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Meterline  "),
+        Span::styled(
+            "usage, costs, models, chats",
+            Style::default().fg(Color::Gray),
+        ),
+        Span::raw("  |  "),
+        Span::styled(label, Style::default().fg(Color::Gray)),
+        Span::raw(": "),
+        Span::styled(
+            value,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+fn tray_value(dashboard: &Dashboard, state: &TuiState) -> (&'static str, String) {
+    let value = match TRAY_ITEMS[state.tray_item] {
+        "Spend" => format!("${:.4}", dashboard.total_cost_usd),
+        "Tokens" => format!(
+            "{} total",
+            compact_number(dashboard.total_input_tokens + dashboard.total_output_tokens)
+        ),
+        "Chats" => dashboard.imported_chats.to_string(),
+        "Sync" => latest_sync_label(dashboard),
+        _ => String::new(),
+    };
+
+    (TRAY_ITEMS[state.tray_item], maybe_hidden(value, state))
+}
+
+fn latest_sync_label(dashboard: &Dashboard) -> String {
+    dashboard
+        .providers
+        .iter()
+        .filter_map(|provider| {
+            provider
+                .last_synced_at
+                .map(|synced| (provider.provider.display_name(), synced))
+        })
+        .max_by_key(|(_, synced)| synced.timestamp())
+        .map(|(name, synced)| format!("{name} {}", synced.format("%b %d %H:%M")))
+        .unwrap_or_else(|| "never".to_string())
+}
+
+fn maybe_hidden(value: String, state: &TuiState) -> String {
+    if state.hide_values {
+        "hidden".to_string()
+    } else {
+        value
     }
 }
 
