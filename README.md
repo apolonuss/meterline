@@ -114,6 +114,8 @@ The default build favors simple installation and portable prebuilt binaries. Adv
 cargo install --git https://github.com/apolonuss/meterline --locked --no-default-features --features encrypted-storage
 ```
 
+On Windows, the SQLCipher build uses vendored OpenSSL and requires Perl in addition to the normal Rust/MSVC build tools. The default installer does not require this.
+
 Imported chat history is metadata-first in v1. Meterline stores titles, timestamps, provider, model hints, estimated token counts, source hashes, and optional short snippets. It does not store full message bodies.
 
 Set `METERLINE_HOME` to override the app data directory, which is useful for tests and portable installs.
