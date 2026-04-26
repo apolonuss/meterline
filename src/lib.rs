@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod cli;
 pub mod export;
 pub mod importers;

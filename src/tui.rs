@@ -15,6 +15,7 @@ use std::io::{self, Stdout};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use crate::browser::{open_provider_connect_page, provider_connect_url};
 use crate::models::{Dashboard, Provider, ProviderAccount};
 use crate::providers::sync_provider;
 use crate::secrets::SecretStore;
@@ -61,7 +62,8 @@ impl TuiState {
             tray_item: settings.default_tray_metric.index(),
             minimized: false,
             hide_values: settings.hide_values,
-            notice: "Live refresh is on. Start with [o] OpenAI, [c] Claude, or import official export zips.".to_string(),
+            notice: "Live refresh is on. Start with [o] OpenAI or [c] Claude browser connect."
+                .to_string(),
             settings,
             last_live_refresh: None,
         }
@@ -289,6 +291,17 @@ fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<Stri
     println!("This stores an API/Admin key in your OS keychain.");
     println!("Meterline never asks for provider passwords or browser sessions.");
     println!();
+    match open_provider_connect_page(provider) {
+        Ok(url) => println!("Opened official {} page: {url}", provider.display_name()),
+        Err(err) => {
+            println!("Could not open your browser automatically: {err:#}");
+            println!(
+                "Open this page manually: {}",
+                provider_connect_url(provider)
+            );
+        }
+    }
+    println!();
 
     let hint = match provider {
         Provider::OpenAi => "OpenAI API key for organization usage/cost endpoints",
@@ -471,10 +484,14 @@ fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, s
     lines.push(Line::from(vec![
         Span::styled("Connect auth: ", Style::default().fg(palette.highlight)),
         Span::styled("[o] OpenAI", Style::default().fg(palette.openai)),
-        Span::raw(" API key   "),
+        Span::raw(" browser key   "),
         Span::styled("[c] Claude", Style::default().fg(palette.claude)),
-        Span::raw(" Admin key   "),
+        Span::raw(" browser admin key   "),
         Span::styled("[r] Sync", Style::default().fg(palette.highlight)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Browser connect: ", Style::default().fg(palette.highlight)),
+        Span::raw("opens the official console page; Meterline only stores the key you paste"),
     ]));
     lines.push(Line::from(vec![
         Span::styled("Live data: ", Style::default().fg(palette.highlight)),
@@ -713,7 +730,7 @@ fn provider_card(
                     .fg(palette.highlight)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" to paste key"),
+            Span::raw(" to open browser and paste key"),
         ]),
         Line::from(format!("Data: {api_hint}")),
     ];

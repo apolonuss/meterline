@@ -66,8 +66,8 @@ cargo install --path . --locked
 ```sh
 meterline
 meterline init
-meterline connect openai
-meterline connect claude
+meterline connect openai --browser
+meterline connect claude --browser
 meterline sync
 meterline import chatgpt path/to/chatgpt-export.zip
 meterline import claude path/to/claude-export.zip
@@ -80,6 +80,7 @@ meterline support
 
 - `o` connects OpenAI with an API key stored in the OS keychain.
 - `c` connects Claude with an Anthropic Admin API key stored in the OS keychain.
+- Browser connect opens the official provider console page first, then asks you to paste the key.
 - Leaving a connect prompt empty cancels cleanly and stores nothing.
 - `r` runs a manual provider sync.
 - `v` toggles live refresh, which polls official authenticated usage APIs every 60 seconds when providers are connected.
@@ -91,6 +92,8 @@ meterline support
 - `q` quits.
 
 Meterline stays terminal-native in v1. The tray is a compact in-terminal status strip rather than an operating-system system tray process, which keeps installation light and predictable across Windows, macOS, and Linux.
+
+Browser connect is browser-assisted, not browser-scraping: Meterline opens the provider console and never reads browser cookies, sessions, or passwords.
 
 ## Customization
 

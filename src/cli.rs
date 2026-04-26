@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::browser::open_provider_connect_page;
 use crate::export::{ExportFormat, export_store};
 use crate::importers::import_archive;
 use crate::models::{ImportProvider, Provider};
@@ -33,6 +34,9 @@ enum Command {
         provider: Provider,
         #[arg(long, env)]
         key: Option<String>,
+        /// Open the official provider console in your browser before prompting.
+        #[arg(long)]
+        browser: bool,
     },
     /// Sync official API usage and costs for connected providers.
     Sync {
@@ -98,7 +102,20 @@ pub fn run_cli(cli: Cli) -> Result<()> {
                 paths.database_path().display()
             );
         }
-        Some(Command::Connect { provider, key }) => {
+        Some(Command::Connect {
+            provider,
+            key,
+            browser,
+        }) => {
+            if browser {
+                match open_provider_connect_page(provider) {
+                    Ok(url) => println!("Opened {} connect page: {url}", provider.display_name()),
+                    Err(err) => eprintln!(
+                        "Could not open browser automatically: {err:#}\nOpen manually: {}",
+                        crate::browser::provider_connect_url(provider)
+                    ),
+                }
+            }
             let key = match key {
                 Some(value) => value,
                 None => rpassword::prompt_password(format!(
