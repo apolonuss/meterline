@@ -55,6 +55,8 @@ enum Command {
     },
     /// Print local storage paths.
     Paths,
+    /// Show the link for sending a thank-you tip.
+    Support,
 }
 
 pub fn run() -> Result<()> {
@@ -63,6 +65,12 @@ pub fn run() -> Result<()> {
 }
 
 pub fn run_cli(cli: Cli) -> Result<()> {
+    if let Some(Command::Support) = &cli.command {
+        println!("Thanks for wanting to support Meterline.");
+        println!("Tip jar: {}", crate::SUPPORT_URL);
+        return Ok(());
+    }
+
     let paths = cli
         .home
         .map(AppPaths::from_dir)
@@ -127,6 +135,7 @@ pub fn run_cli(cli: Cli) -> Result<()> {
             println!("data: {}", paths.data_dir().display());
             println!("database: {}", paths.database_path().display());
         }
+        Some(Command::Support) => unreachable!("support exits before opening local storage"),
         None => crate::tui::run(&store)?,
     }
 

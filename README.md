@@ -10,6 +10,12 @@ It deliberately uses official surfaces:
 
 Meterline does not scrape logged-in web sessions, automate provider websites, or store provider passwords.
 
+## Support Meterline
+
+If Meterline saves you time and you want to say thanks, you can send a small tip or coffee here:
+
+[ko-fi.com/apolonus](https://ko-fi.com/apolonus)
+
 ## Status
 
 This is a v1 implementation scaffold with a working local database, CLI, TUI, importers, exports, and provider sync clients.
@@ -65,6 +71,7 @@ meterline import chatgpt path/to/chatgpt-export.zip
 meterline import claude path/to/claude-export.zip
 meterline export --format json
 meterline export --format csv --output meterline.csv
+meterline support
 ```
 
 ## TUI Controls

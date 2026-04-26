@@ -363,6 +363,8 @@ fn render_exports(frame: &mut Frame<'_>, area: Rect) {
         Line::from("meterline export --format json"),
         Line::from("meterline export --format csv --output meterline.csv"),
         Line::from(""),
+        Line::from(format!("Support Meterline: {}", crate::SUPPORT_URL)),
+        Line::from(""),
         Line::from(Span::styled(
             "Exports include dashboard summaries, usage buckets, cost buckets, and imported chat metadata.",
             Style::default().fg(Color::Gray),

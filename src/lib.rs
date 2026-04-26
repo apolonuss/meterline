@@ -7,3 +7,5 @@ pub mod providers;
 pub mod secrets;
 pub mod store;
 pub mod tui;
+
+pub const SUPPORT_URL: &str = "https://ko-fi.com/apolonus";
