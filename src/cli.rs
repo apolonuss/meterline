@@ -106,7 +106,16 @@ pub fn run_cli(cli: Cli) -> Result<()> {
                     provider.display_name()
                 ))?,
             };
-            SecretStore::set_provider_key(provider, key.trim())?;
+            let key = key.trim();
+            if key.is_empty() {
+                println!(
+                    "{} connection cancelled. No key was stored.",
+                    provider.display_name()
+                );
+                return Ok(());
+            }
+
+            SecretStore::set_provider_key(provider, key)?;
             store.upsert_provider_account(provider, provider.display_name())?;
             println!("Connected {}", provider.display_name());
         }
@@ -153,10 +162,30 @@ pub fn run_cli(cli: Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
+    use tempfile::tempdir;
 
     #[test]
     fn clap_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn connect_with_empty_key_is_cancelled() {
+        let dir = tempdir().unwrap();
+        let cli = Cli::try_parse_from([
+            "meterline",
+            "--home",
+            dir.path().to_str().unwrap(),
+            "connect",
+            "claude",
+            "--key",
+            "",
+        ])
+        .unwrap();
+
+        run_cli(cli).unwrap();
+        let store = Store::open(&dir.path().join("meterline.sqlite3"), "test-key").unwrap();
+        assert!(store.provider_accounts().unwrap().is_empty());
     }
 }

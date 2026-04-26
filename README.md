@@ -80,6 +80,7 @@ meterline support
 
 - `o` connects OpenAI with an API key stored in the OS keychain.
 - `c` connects Claude with an Anthropic Admin API key stored in the OS keychain.
+- Leaving a connect prompt empty cancels cleanly and stores nothing.
 - `r` runs a manual provider sync.
 - `v` toggles live refresh, which polls official authenticated usage APIs every 60 seconds when providers are connected.
 - `g` opens Settings.

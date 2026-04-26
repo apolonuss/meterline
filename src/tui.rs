@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
@@ -253,31 +253,34 @@ fn handle_connect(
     store: &mut Store,
     provider: Provider,
 ) -> String {
-    match connect_provider(terminal, store, provider) {
-        Ok(message) => message,
-        Err(err) => format!("Could not connect {}: {err:#}", provider.display_name()),
-    }
+    connect_provider(terminal, store, provider)
 }
 
 fn connect_provider(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     store: &mut Store,
     provider: Provider,
-) -> Result<String> {
-    suspend_terminal(terminal)?;
+) -> String {
+    if let Err(err) = suspend_terminal(terminal) {
+        return format!(
+            "Could not open {} connect prompt: {err:#}",
+            provider.display_name()
+        );
+    }
+
     let result = connect_provider_prompt(store, provider);
 
-    println!();
-    match &result {
-        Ok(message) => println!("{message}"),
-        Err(err) => eprintln!("Could not connect {}: {err:#}", provider.display_name()),
+    if let Err(err) = resume_terminal(terminal) {
+        return format!(
+            "Could not return to Meterline after {} connect prompt: {err:#}",
+            provider.display_name()
+        );
     }
-    println!("Press Enter to return to Meterline.");
-    let mut line = String::new();
-    let _ = io::stdin().read_line(&mut line);
 
-    resume_terminal(terminal)?;
-    result
+    match result {
+        Ok(message) => message,
+        Err(err) => format!("Could not connect {}: {err:#}", provider.display_name()),
+    }
 }
 
 fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<String> {
@@ -293,8 +296,11 @@ fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<Stri
     };
     let key = rpassword::prompt_password(format!("Paste {hint}: "))?;
     let key = key.trim();
-    if key.is_empty() {
-        bail!("empty key");
+    if key_was_cancelled(key) {
+        return Ok(format!(
+            "{} connection cancelled. No key was stored.",
+            provider.display_name()
+        ));
     }
 
     SecretStore::set_provider_key(provider, key)?;
@@ -654,6 +660,10 @@ fn render_providers(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, pa
         provider_card(frame, cards[1], dashboard, Provider::Claude, palette);
         render_provider_note(frame, layout[1], palette);
     }
+}
+
+fn key_was_cancelled(key: &str) -> bool {
+    key.trim().is_empty() || key.trim() == "\u{1b}"
 }
 
 fn provider_card(
@@ -1254,5 +1264,13 @@ mod tests {
         let text = format!("{buffer:?}");
         assert!(text.contains("Theme"));
         assert!(text.contains("Live refresh"));
+    }
+
+    #[test]
+    fn empty_or_escape_key_cancels_connect() {
+        assert!(key_was_cancelled(""));
+        assert!(key_was_cancelled("   "));
+        assert!(key_was_cancelled("\u{1b}"));
+        assert!(!key_was_cancelled("sk-test"));
     }
 }
