@@ -36,6 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/apolonuss/meterline/main/install.sh
 
 The installer looks for a prebuilt GitHub release for your operating system and CPU. If no release asset is available yet, it falls back to building from source with Cargo.
 
+Windows x64 has a prebuilt release today. macOS and Linux can use the same installer; until native release archives are published, those installs build from source with Cargo.
+
 On Windows, the installer adds Meterline to your user PATH. On macOS and Linux, it installs to `~/.local/bin` and prints the PATH line to add if that directory is not already available.
 
 After installation:
