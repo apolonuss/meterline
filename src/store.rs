@@ -1,16 +1,17 @@
 #[cfg(feature = "encrypted-storage")]
 use anyhow::bail;
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 #[cfg(feature = "encrypted-storage")]
 use rusqlite::OptionalExtension;
 use rusqlite::types::Type;
 use rusqlite::{Connection, params};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::models::{
-    CostBucket, Dashboard, ImportProvider, ImportRun, ImportedChat, ModelSummary, Provider,
-    ProviderAccount, UsageBucket,
+    CostBucket, Dashboard, HourlyUsageSummary, ImportProvider, ImportRun, ImportedChat,
+    ModelSummary, Provider, ProviderAccount, UsageBucket,
 };
 
 pub struct Store {
@@ -264,16 +265,28 @@ impl Store {
         let models = self.model_summaries()?;
         let recent_chats = self.recent_chats(12)?;
         let import_runs = self.import_runs(10)?;
+        let hourly_usage = self.hourly_usage_summaries()?;
 
         let total_cost_usd = self.conn.query_row(
             "SELECT COALESCE(SUM(amount), 0.0) FROM cost_buckets",
             [],
             |row| row.get(0),
         )?;
-        let (total_input_tokens, total_output_tokens, total_requests) = self.conn.query_row(
+        let (api_input_tokens, api_output_tokens, total_requests) = self.conn.query_row(
             "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(requests), 0) FROM usage_buckets",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
+        let (chat_input_tokens, chat_output_tokens) = self.conn.query_row(
+            "SELECT COALESCE(SUM(estimated_input_tokens), 0), COALESCE(SUM(estimated_output_tokens), 0) FROM imported_chats",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )?;
         let imported_chats =
             self.conn
@@ -281,14 +294,15 @@ impl Store {
 
         Ok(Dashboard {
             total_cost_usd,
-            total_input_tokens,
-            total_output_tokens,
+            total_input_tokens: api_input_tokens + chat_input_tokens,
+            total_output_tokens: api_output_tokens + chat_output_tokens,
             total_requests,
             imported_chats,
             providers,
             models,
             recent_chats,
             import_runs,
+            hourly_usage,
         })
     }
 
@@ -373,7 +387,11 @@ impl Store {
                 GROUP BY provider, COALESCE(model, 'unknown')
             ),
             chat_summary AS (
-                SELECT provider, COALESCE(model, 'unknown') AS model, COUNT(*) AS imported_chats
+                SELECT provider, COALESCE(model, 'unknown') AS model,
+                       SUM(estimated_input_tokens) AS input_tokens,
+                       SUM(estimated_output_tokens) AS output_tokens,
+                       COALESCE(SUM(estimated_cost_usd), 0.0) AS cost_usd,
+                       COUNT(*) AS imported_chats
                 FROM imported_chats
                 GROUP BY provider, COALESCE(model, 'unknown')
             )
@@ -385,7 +403,7 @@ impl Store {
                 UNION ALL
                 SELECT provider, model, 0, 0, 0, 0, cost_usd, 0 FROM cost_summary
                 UNION ALL
-                SELECT provider, model, 0, 0, 0, 0, 0.0, imported_chats FROM chat_summary
+                SELECT provider, model, input_tokens, output_tokens, 0, 0, cost_usd, imported_chats FROM chat_summary
             )
             GROUP BY provider, model
             ORDER BY SUM(cost_usd) DESC, SUM(input_tokens + output_tokens) DESC, model
@@ -404,6 +422,31 @@ impl Store {
             })
         })?;
         collect_rows(rows)
+    }
+
+    fn hourly_usage_summaries(&self) -> Result<Vec<HourlyUsageSummary>> {
+        let mut grouped: BTreeMap<(String, u8), HourlyUsageSummary> = BTreeMap::new();
+
+        for bucket in self.usage_buckets()? {
+            let hour = bucket.start_time.hour() as u8;
+            let entry = hourly_entry(&mut grouped, bucket.provider.as_str(), hour);
+            entry.input_tokens += bucket.input_tokens;
+            entry.output_tokens += bucket.output_tokens;
+            entry.requests += bucket.requests;
+        }
+
+        for chat in self.imported_chats()? {
+            let Some(time) = chat.created_at.or(chat.updated_at) else {
+                continue;
+            };
+            let hour = time.hour() as u8;
+            let entry = hourly_entry(&mut grouped, chat.provider.as_str(), hour);
+            entry.input_tokens += chat.estimated_input_tokens;
+            entry.output_tokens += chat.estimated_output_tokens;
+            entry.imported_chats += 1;
+        }
+
+        Ok(grouped.into_values().collect())
     }
 
     fn recent_chats(&self, limit: i64) -> Result<Vec<ImportedChat>> {
@@ -460,6 +503,20 @@ impl Store {
     }
 }
 
+fn hourly_entry<'a>(
+    grouped: &'a mut BTreeMap<(String, u8), HourlyUsageSummary>,
+    provider: &str,
+    hour_utc: u8,
+) -> &'a mut HourlyUsageSummary {
+    grouped
+        .entry((provider.to_string(), hour_utc))
+        .or_insert_with(|| HourlyUsageSummary {
+            provider: provider.to_string(),
+            hour_utc,
+            ..HourlyUsageSummary::default()
+        })
+}
+
 fn collect_rows<T>(rows: impl Iterator<Item = rusqlite::Result<T>>) -> Result<Vec<T>> {
     let mut values = Vec::new();
     for row in rows {
@@ -491,6 +548,7 @@ fn parse_optional_time(value: Option<String>) -> rusqlite::Result<Option<DateTim
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use tempfile::tempdir;
 
     #[test]
@@ -526,5 +584,39 @@ mod tests {
         assert_eq!(second.imported_count, 0);
         assert_eq!(second.skipped_count, 1);
         assert_eq!(store.dashboard().unwrap().imported_chats, 1);
+    }
+
+    #[test]
+    fn dashboard_groups_imported_tokens_by_hour() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("meterline.sqlite3"), "test-key").unwrap();
+        let chat = ImportedChat {
+            provider: Provider::Claude,
+            title: "Hourly chat".to_string(),
+            created_at: Some(Utc.with_ymd_and_hms(2026, 4, 26, 14, 30, 0).unwrap()),
+            updated_at: None,
+            model: Some("claude-test".to_string()),
+            estimated_input_tokens: 40,
+            estimated_output_tokens: 15,
+            estimated_cost_usd: None,
+            source_hash: "hourly".to_string(),
+            snippet: None,
+        };
+
+        store
+            .insert_imported_chats(ImportProvider::Claude, "claude.zip", "ziphash", &[chat])
+            .unwrap();
+
+        let dashboard = store.dashboard().unwrap();
+        let row = dashboard
+            .hourly_usage
+            .iter()
+            .find(|row| row.provider == "claude" && row.hour_utc == 14)
+            .unwrap();
+        assert_eq!(row.input_tokens, 40);
+        assert_eq!(row.output_tokens, 15);
+        assert_eq!(row.imported_chats, 1);
+        assert_eq!(dashboard.total_input_tokens, 40);
+        assert_eq!(dashboard.total_output_tokens, 15);
     }
 }

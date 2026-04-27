@@ -15,10 +15,12 @@ use std::io::{self, Stdout};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::browser::{open_provider_connect_page, provider_connect_url};
-use crate::models::{Dashboard, Provider, ProviderAccount};
+use crate::browser::{
+    open_provider_export_page, provider_export_note, provider_export_url, provider_import_command,
+    provider_product_name,
+};
+use crate::models::{Dashboard, HourlyUsageSummary, Provider, ProviderAccount};
 use crate::providers::sync_provider;
-use crate::secrets::SecretStore;
 use crate::settings::{AppSettings, Theme};
 use crate::store::Store;
 
@@ -62,7 +64,7 @@ impl TuiState {
             tray_item: settings.default_tray_metric.index(),
             minimized: false,
             hide_values: settings.hide_values,
-            notice: "Live refresh is on. Start with [o] OpenAI or [c] Claude browser connect."
+            notice: "Start with [o] ChatGPT export or [c] Claude export, then import the zip."
                 .to_string(),
             settings,
             last_live_refresh: None,
@@ -106,19 +108,6 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-    Ok(())
-}
-
-fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
-}
-
-fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    enable_raw_mode()?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     Ok(())
 }
 
@@ -195,16 +184,12 @@ fn run_loop(
                         );
                     }
                     KeyCode::Char('o') if !state.minimized => {
-                        state.selected = 2;
-                        state.notice = handle_connect(terminal, store, Provider::OpenAi);
-                        dashboard = store.dashboard()?;
-                        last_live_poll = None;
+                        state.selected = 4;
+                        state.notice = handle_browser_export(Provider::OpenAi);
                     }
                     KeyCode::Char('c') if !state.minimized => {
-                        state.selected = 2;
-                        state.notice = handle_connect(terminal, store, Provider::Claude);
-                        dashboard = store.dashboard()?;
-                        last_live_poll = None;
+                        state.selected = 4;
+                        state.notice = handle_browser_export(Provider::Claude);
                     }
                     KeyCode::Char('r') if !state.minimized => {
                         state.notice = sync_connected(
@@ -250,83 +235,23 @@ fn live_refresh_due(
             .unwrap_or(true)
 }
 
-fn handle_connect(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    store: &mut Store,
-    provider: Provider,
-) -> String {
-    connect_provider(terminal, store, provider)
-}
-
-fn connect_provider(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    store: &mut Store,
-    provider: Provider,
-) -> String {
-    if let Err(err) = suspend_terminal(terminal) {
-        return format!(
-            "Could not open {} connect prompt: {err:#}",
-            provider.display_name()
-        );
+fn handle_browser_export(provider: Provider) -> String {
+    let command = provider_import_command(provider);
+    match open_provider_export_page(provider) {
+        Ok(url) => format!(
+            "Opened {} export page: {url}. After download, run: {command}",
+            provider_product_name(provider)
+        ),
+        Err(err) => format!(
+            "Could not open browser: {err:#}. Open {} then run: {command}",
+            provider_export_url(provider)
+        ),
     }
-
-    let result = connect_provider_prompt(store, provider);
-
-    if let Err(err) = resume_terminal(terminal) {
-        return format!(
-            "Could not return to Meterline after {} connect prompt: {err:#}",
-            provider.display_name()
-        );
-    }
-
-    match result {
-        Ok(message) => message,
-        Err(err) => format!("Could not connect {}: {err:#}", provider.display_name()),
-    }
-}
-
-fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<String> {
-    println!("Meterline connect {}", provider.display_name());
-    println!();
-    println!("This stores an API/Admin key in your OS keychain.");
-    println!("Meterline never asks for provider passwords or browser sessions.");
-    println!();
-    match open_provider_connect_page(provider) {
-        Ok(url) => println!("Opened official {} page: {url}", provider.display_name()),
-        Err(err) => {
-            println!("Could not open your browser automatically: {err:#}");
-            println!(
-                "Open this page manually: {}",
-                provider_connect_url(provider)
-            );
-        }
-    }
-    println!();
-
-    let hint = match provider {
-        Provider::OpenAi => "OpenAI API key for organization usage/cost endpoints",
-        Provider::Claude => "Anthropic Admin API key for Usage & Cost API",
-    };
-    let key = rpassword::prompt_password(format!("Paste {hint}: "))?;
-    let key = key.trim();
-    if key_was_cancelled(key) {
-        return Ok(format!(
-            "{} connection cancelled. No key was stored.",
-            provider.display_name()
-        ));
-    }
-
-    SecretStore::set_provider_key(provider, key)?;
-    store.upsert_provider_account(provider, provider.display_name())?;
-    Ok(format!(
-        "{} connected. Live refresh will update after auth; press [r] for a full sync.",
-        provider.display_name()
-    ))
 }
 
 fn sync_connected(store: &mut Store, dashboard: &Dashboard, days: i64, label: &str) -> String {
     if dashboard.providers.is_empty() {
-        return "Nothing to sync yet. Press [o] OpenAI or [c] Claude to connect first.".to_string();
+        return "Nothing to sync yet. Individual users should import exports; API users can connect from the CLI.".to_string();
     }
 
     let mut parts = Vec::new();
@@ -482,26 +407,26 @@ fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, s
     };
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
-        Span::styled("Connect auth: ", Style::default().fg(palette.highlight)),
-        Span::styled("[o] OpenAI", Style::default().fg(palette.openai)),
-        Span::raw(" browser key   "),
+        Span::styled("Individual setup: ", Style::default().fg(palette.highlight)),
+        Span::styled("[o] ChatGPT export", Style::default().fg(palette.openai)),
+        Span::raw("   "),
         Span::styled("[c] Claude", Style::default().fg(palette.claude)),
-        Span::raw(" browser admin key   "),
+        Span::raw(" export   "),
         Span::styled("[r] Sync", Style::default().fg(palette.highlight)),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Browser connect: ", Style::default().fg(palette.highlight)),
-        Span::raw("opens the official console page; Meterline only stores the key you paste"),
+        Span::styled("Browser setup: ", Style::default().fg(palette.highlight)),
+        Span::raw("opens official export/privacy pages; import the downloaded zip"),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Live data: ", Style::default().fg(palette.highlight)),
+        Span::styled("Live/API data: ", Style::default().fg(palette.highlight)),
         Span::raw(format!(
-            "official authenticated polling every 60s ({live_label}); usage freshness depends on provider reporting"
+            "optional key-based polling every 60s ({live_label}); individual accounts can use exports"
         )),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Import chats: ", Style::default().fg(palette.highlight)),
-        Span::raw("official export zips only, metadata-first, no message bodies in v1"),
+        Span::styled("Usage rhythm: ", Style::default().fg(palette.highlight)),
+        Span::raw("hourly token patterns come from imported/exported metadata, not scraping"),
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(
@@ -512,7 +437,7 @@ fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, s
     ));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "No provider passwords. No web scraping. No usage webhooks are required for v1.",
+        "No provider passwords. No web scraping. No message bodies stored in v1.",
         Style::default().fg(palette.soft),
     )));
 
@@ -599,15 +524,52 @@ fn stat_card(
 
 fn render_models(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
     let palette = state.palette();
-    if dashboard.models.is_empty() {
+    if dashboard.models.is_empty() && dashboard.hourly_usage.is_empty() {
         render_empty(
             frame,
             area,
             " models ",
             vec![
                 Line::from("No model usage yet."),
-                Line::from("Press [o] or [c] to connect a provider, then press [r] to sync."),
-                Line::from("Live refresh updates connected provider data every 60 seconds."),
+                Line::from("Press [o] or [c] to open official export pages, then import the zip."),
+                Line::from("API users can also connect from the CLI and press [r] to sync."),
+            ],
+            palette,
+        );
+        return;
+    }
+
+    let layout = if area.height >= 18 {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area)
+    };
+
+    render_model_table(frame, layout[0], dashboard, state, palette);
+    render_usage_rhythm(frame, layout[1], dashboard, state, palette);
+}
+
+fn render_model_table(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    dashboard: &Dashboard,
+    state: &TuiState,
+    palette: Palette,
+) {
+    if dashboard.models.is_empty() {
+        render_empty(
+            frame,
+            area,
+            " models ",
+            vec![
+                Line::from("No model rows yet."),
+                Line::from("Import an export zip or sync an API account to fill this table."),
             ],
             palette,
         );
@@ -647,20 +609,37 @@ fn render_models(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state
     frame.render_widget(table, area);
 }
 
+fn render_usage_rhythm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    dashboard: &Dashboard,
+    state: &TuiState,
+    palette: Palette,
+) {
+    let max_rows = area.height.saturating_sub(3).max(1) as usize;
+    let lines = usage_rhythm_lines(dashboard, state, palette, max_rows);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel_block(" usage rhythm by hour ", palette))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
 fn render_providers(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, palette: Palette) {
     let layout = if area.width < 88 {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8),
-                Constraint::Length(8),
+                Constraint::Length(9),
+                Constraint::Length(9),
                 Constraint::Min(4),
             ])
             .split(area)
     } else {
         Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(8), Constraint::Min(4)])
+            .constraints([Constraint::Length(9), Constraint::Min(4)])
             .split(area)
     };
 
@@ -679,10 +658,6 @@ fn render_providers(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, pa
     }
 }
 
-fn key_was_cancelled(key: &str) -> bool {
-    key.trim().is_empty() || key.trim() == "\u{1b}"
-}
-
 fn provider_card(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -697,8 +672,8 @@ fn provider_card(
         Provider::Claude => "[c]",
     };
     let api_hint = match provider {
-        Provider::OpenAi => "OpenAI usage/cost API",
-        Provider::Claude => "Anthropic Usage & Cost Admin API",
+        Provider::OpenAi => "ChatGPT export + optional OpenAI API sync",
+        Provider::Claude => "Claude export + optional API/org sync",
     };
     let status = if account.is_some() {
         Span::styled(
@@ -723,16 +698,17 @@ fn provider_card(
         )]),
         Line::from(vec![Span::raw("Status: "), status]),
         Line::from(vec![
-            Span::raw("Auth: press "),
+            Span::raw("Setup: press "),
             Span::styled(
                 key,
                 Style::default()
                     .fg(palette.highlight)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" to open browser and paste key"),
+            Span::raw(" to open official export page"),
         ]),
         Line::from(format!("Data: {api_hint}")),
+        Line::from(provider_export_note(provider)),
     ];
 
     if let Some(account) = account {
@@ -748,7 +724,9 @@ fn provider_card(
                 .unwrap_or_else(|| "never".to_string())
         )));
     } else {
-        lines.push(Line::from("Sync: connect first, then live refresh starts"));
+        lines.push(Line::from(
+            "Sync: import exports first; API sync is optional",
+        ));
     }
 
     frame.render_widget(
@@ -762,15 +740,15 @@ fn provider_card(
 fn render_provider_note(frame: &mut Frame<'_>, area: Rect, palette: Palette) {
     let lines = vec![
         Line::from(vec![
-            Span::styled("Live data: ", Style::default().fg(palette.highlight)),
-            Span::raw(
-                "Meterline polls official authenticated usage APIs once per minute when enabled.",
-            ),
+            Span::styled("Individual users: ", Style::default().fg(palette.highlight)),
+            Span::raw("use official ChatGPT/Claude exports, then import the zip."),
         ]),
         Line::from(
-            "Use provider API/Admin keys for API usage. Use official data exports for ChatGPT/Claude chat metadata.",
+            "API/org sync is optional and stays on official provider APIs; browser setup never asks for provider passwords.",
         ),
-        Line::from("Provider passwords are never requested or stored."),
+        Line::from(
+            "Claude hourly rhythm is historical local data, not a live remaining-quota meter.",
+        ),
     ];
     frame.render_widget(
         Paragraph::new(lines)
@@ -1015,14 +993,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state
                 .fg(palette.openai)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" OpenAI  "),
+        Span::raw(" ChatGPT export  "),
         Span::styled(
             "[c]",
             Style::default()
                 .fg(palette.claude)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" Claude  "),
+        Span::raw(" Claude export  "),
         Span::styled(
             "[r]",
             Style::default()
@@ -1085,6 +1063,107 @@ fn style_for_provider_text(value: &str, palette: Palette) -> Style {
         "openai" | "chatgpt" => Style::default().fg(palette.openai),
         "claude" | "anthropic" => Style::default().fg(palette.claude),
         _ => Style::default(),
+    }
+}
+
+fn usage_rhythm_lines(
+    dashboard: &Dashboard,
+    state: &TuiState,
+    palette: Palette,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
+    let claude_rows: Vec<&HourlyUsageSummary> = dashboard
+        .hourly_usage
+        .iter()
+        .filter(|row| row.provider == "claude" && total_hourly_tokens(row) > 0)
+        .collect();
+    let mut rows: Vec<&HourlyUsageSummary> = if claude_rows.is_empty() {
+        dashboard
+            .hourly_usage
+            .iter()
+            .filter(|row| total_hourly_tokens(row) > 0)
+            .collect()
+    } else {
+        claude_rows
+    };
+
+    if rows.is_empty() {
+        return vec![
+            Line::from("No hourly rhythm yet."),
+            Line::from("Import a Claude or ChatGPT export to estimate tokens by hour."),
+            Line::from("Claude's live remaining quota is only visible in Claude settings."),
+        ];
+    }
+
+    rows.sort_by(|left, right| {
+        total_hourly_tokens(right)
+            .cmp(&total_hourly_tokens(left))
+            .then_with(|| left.hour_utc.cmp(&right.hour_utc))
+    });
+    let max_total = rows
+        .iter()
+        .map(|row| total_hourly_tokens(row))
+        .max()
+        .unwrap_or(1);
+    let row_limit = max_rows.saturating_sub(1).clamp(1, 12);
+    let target = if rows.iter().all(|row| row.provider == "claude") {
+        "Claude"
+    } else {
+        "all providers"
+    };
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("Busiest {target} hours: "),
+            Style::default().fg(palette.highlight),
+        ),
+        Span::raw("historical tokens from imports/API buckets, shown in UTC."),
+    ])];
+
+    for row in rows.into_iter().take(row_limit) {
+        let total = total_hourly_tokens(row);
+        let bar = if state.hide_values {
+            "hidden".to_string()
+        } else {
+            let width = ((total * 24 + max_total - 1) / max_total).clamp(1, 24) as usize;
+            "#".repeat(width)
+        };
+        let value = maybe_hidden(
+            format!(
+                "{} tok, {} chats",
+                compact_number(total),
+                compact_number(row.imported_chats)
+            ),
+            state,
+        );
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:02}:00 UTC ", row.hour_utc),
+                Style::default().fg(palette.soft),
+            ),
+            Span::styled(
+                format!("{:<7}", provider_name_from_str(&row.provider)),
+                style_for_provider_text(&row.provider, palette).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {:<24} ", bar),
+                style_for_provider_text(&row.provider, palette),
+            ),
+            Span::styled(value, Style::default().fg(palette.value)),
+        ]));
+    }
+    lines
+}
+
+fn total_hourly_tokens(row: &HourlyUsageSummary) -> i64 {
+    row.input_tokens + row.output_tokens
+}
+
+fn provider_name_from_str(value: &str) -> &'static str {
+    match value {
+        "openai" | "chatgpt" => "ChatGPT",
+        "claude" | "anthropic" => "Claude",
+        _ => "Other",
     }
 }
 
@@ -1264,9 +1343,9 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let text = format!("{buffer:?}");
         assert!(text.contains("Meterline"));
-        assert!(text.contains("OpenAI"));
+        assert!(text.contains("ChatGPT"));
         assert!(text.contains("Claude"));
-        assert!(text.contains("Connect auth"));
+        assert!(text.contains("Individual setup"));
         assert!(text.contains("Settings"));
     }
 
@@ -1284,10 +1363,25 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_escape_key_cancels_connect() {
-        assert!(key_was_cancelled(""));
-        assert!(key_was_cancelled("   "));
-        assert!(key_was_cancelled("\u{1b}"));
-        assert!(!key_was_cancelled("sk-test"));
+    fn renders_usage_rhythm_panel() {
+        let backend = TestBackend::new(120, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let dashboard = Dashboard {
+            hourly_usage: vec![HourlyUsageSummary {
+                provider: "claude".to_string(),
+                hour_utc: 14,
+                input_tokens: 120,
+                output_tokens: 80,
+                imported_chats: 2,
+                ..HourlyUsageSummary::default()
+            }],
+            ..Dashboard::default()
+        };
+        terminal.draw(|frame| render(frame, &dashboard, 1)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = format!("{buffer:?}");
+        assert!(text.contains("usage rhythm"));
+        assert!(text.contains("14:00 UTC"));
+        assert!(text.contains("Claude"));
     }
 }

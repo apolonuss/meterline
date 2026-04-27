@@ -3,15 +3,40 @@ use std::process::Command;
 
 use crate::models::Provider;
 
-pub fn provider_connect_url(provider: Provider) -> &'static str {
+pub fn provider_export_url(provider: Provider) -> &'static str {
     match provider {
-        Provider::OpenAi => "https://platform.openai.com/api-keys",
-        Provider::Claude => "https://console.anthropic.com/settings/admin-keys",
+        Provider::OpenAi => "https://chatgpt.com/#settings/DataControls",
+        Provider::Claude => "https://claude.ai/settings/privacy",
     }
 }
 
-pub fn open_provider_connect_page(provider: Provider) -> Result<&'static str> {
-    let url = provider_connect_url(provider);
+pub fn provider_export_note(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => {
+            "ChatGPT individual users can export data from Data Controls, then import the zip."
+        }
+        Provider::Claude => {
+            "Claude individual users can export data from Privacy settings, then import the zip."
+        }
+    }
+}
+
+pub fn provider_import_command(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => "meterline import chatgpt path/to/chatgpt-export.zip",
+        Provider::Claude => "meterline import claude path/to/claude-export.zip",
+    }
+}
+
+pub fn provider_product_name(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => "ChatGPT",
+        Provider::Claude => "Claude",
+    }
+}
+
+pub fn open_provider_export_page(provider: Provider) -> Result<&'static str> {
+    let url = provider_export_url(provider);
     open_url(url)?;
     Ok(url)
 }
@@ -61,14 +86,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_urls_are_official_console_pages() {
+    fn provider_urls_are_official_export_pages() {
         assert_eq!(
-            provider_connect_url(Provider::OpenAi),
-            "https://platform.openai.com/api-keys"
+            provider_export_url(Provider::OpenAi),
+            "https://chatgpt.com/#settings/DataControls"
         );
         assert_eq!(
-            provider_connect_url(Provider::Claude),
-            "https://console.anthropic.com/settings/admin-keys"
+            provider_export_url(Provider::Claude),
+            "https://claude.ai/settings/privacy"
         );
+    }
+
+    #[test]
+    fn provider_notes_explain_individual_exports() {
+        assert!(provider_export_note(Provider::OpenAi).contains("export data"));
+        assert!(provider_export_note(Provider::Claude).contains("Privacy settings"));
+        assert!(provider_import_command(Provider::Claude).contains("import claude"));
     }
 }

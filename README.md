@@ -4,9 +4,9 @@ Meterline is a fast, comfy terminal tool for tracking OpenAI/ChatGPT and Anthrop
 
 It deliberately uses official surfaces:
 
-- OpenAI organization usage and cost API endpoints.
-- Anthropic Usage and Cost Admin API endpoints.
 - Official ChatGPT and Claude data-export archives for consumer chat history.
+- Optional OpenAI organization usage and cost API endpoints for API users.
+- Optional Anthropic Usage and Cost Admin API endpoints for organization API users.
 
 Meterline does not scrape logged-in web sessions, automate provider websites, or store provider passwords.
 
@@ -68,7 +68,6 @@ meterline
 meterline init
 meterline connect openai --browser
 meterline connect claude --browser
-meterline sync
 meterline import chatgpt path/to/chatgpt-export.zip
 meterline import claude path/to/claude-export.zip
 meterline export --format json
@@ -76,13 +75,19 @@ meterline export --format csv --output meterline.csv
 meterline support
 ```
 
+Optional API usage sync for users who have provider API/admin access:
+
+```sh
+meterline connect openai
+meterline connect claude
+meterline sync
+```
+
 ## TUI Controls
 
-- `o` connects OpenAI with an API key stored in the OS keychain.
-- `c` connects Claude with an Anthropic Admin API key stored in the OS keychain.
-- Browser connect opens the official provider console page first, then asks you to paste the key.
-- Leaving a connect prompt empty cancels cleanly and stores nothing.
-- `r` runs a manual provider sync.
+- `o` opens ChatGPT Data Controls so individual users can export their official data zip.
+- `c` opens Claude Privacy settings so individual users can export their official data zip.
+- `r` runs a manual provider sync for optional API-connected accounts.
 - `v` toggles live refresh, which polls official authenticated usage APIs every 60 seconds when providers are connected.
 - `g` opens Settings.
 - `m` toggles minimized mode.
@@ -93,7 +98,7 @@ meterline support
 
 Meterline stays terminal-native in v1. The tray is a compact in-terminal status strip rather than an operating-system system tray process, which keeps installation light and predictable across Windows, macOS, and Linux.
 
-Browser connect is browser-assisted, not browser-scraping: Meterline opens the provider console and never reads browser cookies, sessions, or passwords.
+Browser setup is browser-assisted, not browser-scraping: Meterline opens official export/settings pages and never reads browser cookies, sessions, or passwords.
 
 ## Customization
 
@@ -118,10 +123,19 @@ On Windows, the SQLCipher build uses vendored OpenSSL and requires Perl in addit
 
 Imported chat history is metadata-first in v1. Meterline stores titles, timestamps, provider, model hints, estimated token counts, source hashes, and optional short snippets. It does not store full message bodies.
 
+The Models panel also shows a usage rhythm by hour. For individual ChatGPT and Claude users this is based on imported export metadata and estimated tokens. For API users it also includes synced usage buckets when available. This is a historical usage pattern, not a live remaining-quota meter.
+
 Set `METERLINE_HOME` to override the app data directory, which is useful for tests and portable installs.
 
 ## Provider Notes
 
-OpenAI usage sync expects an API key with access to organization usage and costs. Anthropic usage sync expects an Admin API key beginning with `sk-ant-admin...`; individual Claude users can still import official Claude data exports.
+Individual users should start with official exports:
+
+- ChatGPT: `meterline connect openai --browser`, export from Data Controls, then `meterline import chatgpt <zip>`.
+- Claude: `meterline connect claude --browser`, export from Privacy settings, then `meterline import claude <zip>`.
+
+Optional API sync is separate. OpenAI usage sync expects an API key with access to organization usage and costs. Anthropic API usage sync expects an Admin API key and organization access. Individual Claude users do not need Anthropic Admin API access to use Meterline with exports.
 
 Live refresh uses official authenticated API polling. It does not use provider web sessions, passwords, scraping, or local webhooks. Provider reporting can lag behind actual usage, so Meterline shows the last refresh time in the TUI.
+
+Claude's own usage limit can vary by plan, model, message length, attachments, current conversation length, features, and provider capacity. Claude exposes usage progress to signed-in paid users in Claude settings, but Meterline does not scrape that page. Meterline shows your imported/synced usage by hour so you can see when you tend to spend tokens.

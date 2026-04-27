@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::browser::open_provider_connect_page;
+use crate::browser::{
+    open_provider_export_page, provider_export_url, provider_import_command, provider_product_name,
+};
 use crate::export::{ExportFormat, export_store};
 use crate::importers::import_archive;
 use crate::models::{ImportProvider, Provider};
@@ -29,12 +31,12 @@ pub struct Cli {
 enum Command {
     /// Initialize the local database.
     Init,
-    /// Store a provider key in the OS keychain.
+    /// Open export setup or store an optional provider API key.
     Connect {
         provider: Provider,
         #[arg(long, env)]
         key: Option<String>,
-        /// Open the official provider console in your browser before prompting.
+        /// Open the official ChatGPT/Claude export page for individual users.
         #[arg(long)]
         browser: bool,
     },
@@ -108,12 +110,27 @@ pub fn run_cli(cli: Cli) -> Result<()> {
             browser,
         }) => {
             if browser {
-                match open_provider_connect_page(provider) {
-                    Ok(url) => println!("Opened {} connect page: {url}", provider.display_name()),
+                match open_provider_export_page(provider) {
+                    Ok(url) => {
+                        println!(
+                            "Opened {} export page: {url}",
+                            provider_product_name(provider)
+                        )
+                    }
                     Err(err) => eprintln!(
                         "Could not open browser automatically: {err:#}\nOpen manually: {}",
-                        crate::browser::provider_connect_url(provider)
+                        provider_export_url(provider)
                     ),
+                }
+                println!("After your export zip is ready, run:");
+                println!("{}", provider_import_command(provider));
+                println!();
+                println!(
+                    "For optional API usage sync, run `meterline connect {}` without --browser.",
+                    provider.as_str()
+                );
+                if key.is_none() {
+                    return Ok(());
                 }
             }
             let key = match key {

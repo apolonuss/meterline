@@ -158,6 +158,16 @@ pub struct ModelSummary {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct HourlyUsageSummary {
+    pub provider: String,
+    pub hour_utc: u8,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub requests: i64,
+    pub imported_chats: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Dashboard {
     pub total_cost_usd: f64,
     pub total_input_tokens: i64,
@@ -168,4 +178,6 @@ pub struct Dashboard {
     pub models: Vec<ModelSummary>,
     pub recent_chats: Vec<ImportedChat>,
     pub import_runs: Vec<ImportRun>,
+    #[serde(default)]
+    pub hourly_usage: Vec<HourlyUsageSummary>,
 }
