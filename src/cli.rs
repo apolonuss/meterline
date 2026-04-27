@@ -3,9 +3,10 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::browser::{
-    open_provider_key_page, provider_key_note, provider_key_url, provider_product_name,
-    provider_proxy_base_url,
+    open_provider_key_page, provider_env_var, provider_key_note, provider_key_url,
+    provider_product_name, provider_proxy_base_url,
 };
+use crate::connect::{connect_provider_with_key, key_was_cancelled, provider_key_from_env};
 use crate::export::{ExportFormat, export_store};
 use crate::importers::import_archive;
 use crate::models::{ImportProvider, Provider};
@@ -35,8 +36,11 @@ enum Command {
     /// Store a provider API key in the OS keychain.
     Connect {
         provider: Provider,
-        #[arg(long, env)]
+        #[arg(long)]
         key: Option<String>,
+        /// Read the provider key from OPENAI_API_KEY or ANTHROPIC_API_KEY.
+        #[arg(long)]
+        from_env: bool,
         /// Open the official provider API-key page before prompting.
         #[arg(long)]
         browser: bool,
@@ -120,9 +124,10 @@ pub fn run_cli(cli: Cli) -> Result<()> {
         Some(Command::Connect {
             provider,
             key,
+            from_env,
             browser,
         }) => {
-            if browser {
+            if browser && !from_env && key.is_none() {
                 match open_provider_key_page(provider) {
                     Ok(url) => {
                         println!(
@@ -142,15 +147,26 @@ pub fn run_cli(cli: Cli) -> Result<()> {
                     provider_proxy_base_url(provider)
                 );
             }
+            let mut used_env_key = false;
             let key = match key {
                 Some(value) => value,
+                None if from_env => {
+                    used_env_key = true;
+                    provider_key_from_env(provider).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{} is not set in this terminal. Set it first or run `meterline connect {}` to paste a key.",
+                            provider_env_var(provider),
+                            provider
+                        )
+                    })?
+                }
                 None => rpassword::prompt_password(format!(
                     "Paste your {} key: ",
                     provider.display_name()
                 ))?,
             };
             let key = key.trim();
-            if key.is_empty() {
+            if key_was_cancelled(key) {
                 println!(
                     "{} connection cancelled. No key was stored.",
                     provider.display_name()
@@ -158,9 +174,11 @@ pub fn run_cli(cli: Cli) -> Result<()> {
                 return Ok(());
             }
 
-            SecretStore::set_provider_key(provider, key)?;
-            store.upsert_provider_account(provider, provider.display_name())?;
+            connect_provider_with_key(&mut store, provider, key)?;
             println!("Connected {}", provider.display_name());
+            if used_env_key {
+                println!("Used {} from this terminal.", provider_env_var(provider));
+            }
             println!("Start live tracking with: meterline");
             println!("Base URL: {}", provider_proxy_base_url(provider));
         }

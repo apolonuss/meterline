@@ -11,17 +11,17 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs, Wrap};
 use ratatui::{Frame, Terminal};
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::browser::{
-    open_provider_key_page, provider_key_note, provider_key_url, provider_product_name,
-    provider_proxy_base_url,
+    open_provider_key_page, provider_env_var, provider_key_note, provider_key_url,
+    provider_product_name, provider_proxy_base_url,
 };
+use crate::connect::{connect_provider_with_key, key_was_cancelled, provider_key_from_env};
 use crate::models::{Dashboard, HourlyUsageSummary, Provider, ProviderAccount};
 use crate::providers::sync_provider;
-use crate::secrets::SecretStore;
 use crate::settings::{AppSettings, Theme};
 use crate::store::Store;
 
@@ -296,6 +296,36 @@ fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<Stri
     println!("It never asks for provider passwords or browser sessions.");
     println!("{}", provider_key_note(provider));
     println!();
+
+    if let Some(key) = provider_key_from_env(provider) {
+        println!("Detected {} in this terminal.", provider_env_var(provider));
+        println!(
+            "Use it for {} and save it to the OS keychain? [Y/n]",
+            provider.display_name()
+        );
+        print!("Approve local key use: ");
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        println!();
+
+        if approval_accepts(answer.trim()) {
+            connect_provider_with_key(store, provider, &key)?;
+            return Ok(format!(
+                "{} connected from {}. Keep using {} for live tracking.",
+                provider.display_name(),
+                provider_env_var(provider),
+                provider_proxy_base_url(provider)
+            ));
+        }
+
+        println!(
+            "Skipped {}. You can paste a key instead.",
+            provider_env_var(provider)
+        );
+        println!();
+    }
+
     match open_provider_key_page(provider) {
         Ok(url) => println!(
             "Opened official {} key page: {url}",
@@ -320,8 +350,7 @@ fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<Stri
         ));
     }
 
-    SecretStore::set_provider_key(provider, key)?;
-    store.upsert_provider_account(provider, provider.display_name())?;
+    connect_provider_with_key(store, provider, key)?;
     Ok(format!(
         "{} connected. Keep using {} for live tracking.",
         provider.display_name(),
@@ -329,8 +358,8 @@ fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<Stri
     ))
 }
 
-fn key_was_cancelled(key: &str) -> bool {
-    key.trim().is_empty() || key.trim() == "\u{1b}"
+fn approval_accepts(input: &str) -> bool {
+    !matches!(input.trim().to_ascii_lowercase().as_str(), "n" | "no")
 }
 
 fn sync_connected(store: &mut Store, dashboard: &Dashboard, days: i64, label: &str) -> String {
@@ -491,10 +520,10 @@ fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, s
             Span::styled("[c] Claude", Style::default().fg(palette.claude)),
             Span::raw(" or "),
             Span::styled("[o] OpenAI", Style::default().fg(palette.openai)),
-            Span::raw(". Paste the API key when prompted."),
+            Span::raw(". Approve a detected env key or paste one."),
         ]));
         lines.push(Line::from(
-            "Then point your SDK/tool at the Meterline base URL.",
+            "Uses ANTHROPIC_API_KEY / OPENAI_API_KEY when you approve it.",
         ));
         lines.push(Line::from(
             "No browser scraping, provider passwords, or message body storage.",
@@ -748,11 +777,11 @@ fn render_provider_setup(frame: &mut Frame<'_>, area: Rect, palette: Palette) {
     let lines = vec![
         Line::from(vec![
             Span::styled("[c] Claude", Style::default().fg(palette.claude)),
-            Span::raw("  connect and paste API key"),
+            Span::raw("  approve ANTHROPIC_API_KEY or paste API key"),
         ]),
         Line::from(vec![
             Span::styled("[o] OpenAI", Style::default().fg(palette.openai)),
-            Span::raw("  add later if you need ChatGPT/API tracking"),
+            Span::raw("  approve OPENAI_API_KEY or add later"),
         ]),
         Line::from(""),
         Line::from("After connecting, set your SDK base URL to the provider's Meterline URL."),
@@ -813,8 +842,9 @@ fn provider_card(
                     .fg(palette.highlight)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" to open the key page, then paste the key"),
+            Span::raw(" to approve env key or paste a key"),
         ]),
+        Line::from(format!("Env: {}", provider_env_var(provider))),
         Line::from(format!("Data: {api_hint}")),
         Line::from(provider_key_note(provider)),
         Line::from(format!("Base: {}", provider_proxy_base_url(provider))),
@@ -1646,5 +1676,14 @@ mod tests {
         assert!(text.contains("usage rhythm"));
         assert!(text.contains("14:00 UTC"));
         assert!(text.contains("Claude"));
+    }
+
+    #[test]
+    fn env_key_approval_defaults_to_yes() {
+        assert!(approval_accepts(""));
+        assert!(approval_accepts("y"));
+        assert!(approval_accepts("yes"));
+        assert!(!approval_accepts("n"));
+        assert!(!approval_accepts("no"));
     }
 }

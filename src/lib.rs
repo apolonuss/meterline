@@ -1,5 +1,6 @@
 pub mod browser;
 pub mod cli;
+pub mod connect;
 pub mod export;
 pub mod importers;
 pub mod models;

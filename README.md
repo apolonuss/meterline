@@ -69,6 +69,8 @@ meterline
 meterline init
 meterline connect openai
 meterline connect claude
+meterline connect openai --from-env
+meterline connect claude --from-env
 meterline live
 meterline daemon
 meterline watch
@@ -96,6 +98,15 @@ meterline connect openai --browser
 meterline connect claude --browser
 ```
 
+If your shell already has the normal SDK environment variables, Meterline can use them after explicit local approval:
+
+```sh
+export OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...
+meterline connect openai --from-env
+meterline connect claude --from-env
+```
+
 Optional historical import support remains available, but it is not the primary live path:
 
 ```sh
@@ -105,9 +116,9 @@ meterline import claude path/to/claude-export.zip
 
 ## TUI Controls
 
-- `o` opens the OpenAI API-key page.
-- `c` opens the Claude API-key page.
-- After `o` or `c`, Meterline prompts you to paste the API key and stores it in the OS keychain.
+- `o` connects OpenAI from `OPENAI_API_KEY` after approval, or opens the API-key page and prompts.
+- `c` connects Claude from `ANTHROPIC_API_KEY` after approval, or opens the API-key page and prompts.
+- Connected keys are stored in the OS keychain.
 - `r` runs a manual provider sync for optional API-connected accounts.
 - `v` toggles optional API refresh polling every 60 seconds when providers are connected.
 - `g` opens Settings.
@@ -162,8 +173,16 @@ meterline connect claude
 meterline
 ```
 
+Or use keys already present in your terminal:
+
+```sh
+meterline connect openai --from-env
+meterline connect claude --from-env
+meterline
+```
+
 Meterline can also forward incoming request auth headers, so tools may keep using their own API keys while Meterline acts as the local base URL.
 
 Optional API sync is separate. OpenAI usage sync expects an API key with access to organization usage and costs. Anthropic usage/cost sync expects an Admin API key and organization access. The live proxy path does not require Anthropic Admin API access; it tracks requests that pass through Meterline.
 
-Consumer ChatGPT/Claude web SSO is not used because it does not expose official delegated scopes for terminal apps to read live usage, chats, or remaining quota. Meterline stays honest: real-time tracking works for API traffic routed through the local proxy. Claude's own usage limit can vary by plan, model, message length, attachments, current conversation length, features, and provider capacity; Meterline does not scrape Claude settings.
+Consumer ChatGPT/Claude web SSO is not used because it does not expose official delegated scopes for terminal apps to read live usage, chats, or remaining quota. Anthropic's public API authentication requires an `x-api-key` header, so Meterline automates only the safe local part: detecting `ANTHROPIC_API_KEY`, asking permission, and storing it locally. Real-time tracking works for API traffic routed through the local proxy. Claude's own usage limit can vary by plan, model, message length, attachments, current conversation length, features, and provider capacity; Meterline does not scrape Claude settings.

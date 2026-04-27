@@ -28,6 +28,13 @@ pub fn provider_proxy_base_url(provider: Provider) -> &'static str {
     }
 }
 
+pub fn provider_env_var(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => "OPENAI_API_KEY",
+        Provider::Claude => "ANTHROPIC_API_KEY",
+    }
+}
+
 pub fn provider_product_name(provider: Provider) -> &'static str {
     match provider {
         Provider::OpenAi => "OpenAI",
@@ -102,5 +109,11 @@ mod tests {
         assert!(provider_key_note(Provider::OpenAi).contains("proxy OpenAI"));
         assert!(provider_key_note(Provider::Claude).contains("proxy Anthropic"));
         assert!(provider_proxy_base_url(Provider::Claude).contains("/anthropic/v1"));
+    }
+
+    #[test]
+    fn provider_env_vars_are_standard_sdk_names() {
+        assert_eq!(provider_env_var(Provider::OpenAi), "OPENAI_API_KEY");
+        assert_eq!(provider_env_var(Provider::Claude), "ANTHROPIC_API_KEY");
     }
 }
