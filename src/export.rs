@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::io::Write;
 use std::path::Path;
 
-use crate::models::{CostBucket, Dashboard, ImportedChat, UsageBucket};
+use crate::models::{CostBucket, Dashboard, ImportedChat, LiveRequest, UsageBucket};
 use crate::store::Store;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -18,6 +18,7 @@ struct ExportBundle {
     usage: Vec<UsageBucket>,
     costs: Vec<CostBucket>,
     chats: Vec<ImportedChat>,
+    live_requests: Vec<LiveRequest>,
 }
 
 #[derive(Serialize)]
@@ -36,6 +37,9 @@ struct CsvRow {
     currency: String,
     line_item: String,
     source_hash: String,
+    status_code: i64,
+    path: String,
+    request_id: String,
 }
 
 pub fn export_store(store: &Store, format: ExportFormat, output: Option<&Path>) -> Result<()> {
@@ -44,6 +48,7 @@ pub fn export_store(store: &Store, format: ExportFormat, output: Option<&Path>) 
         usage: store.usage_buckets()?,
         costs: store.cost_buckets()?,
         chats: store.imported_chats()?,
+        live_requests: store.live_requests()?,
     };
 
     let mut bytes = Vec::new();
@@ -81,6 +86,9 @@ fn write_csv(writer: impl Write, bundle: &ExportBundle) -> Result<()> {
             currency: String::new(),
             line_item: String::new(),
             source_hash: String::new(),
+            status_code: 0,
+            path: String::new(),
+            request_id: String::new(),
         })?;
     }
     for cost in &bundle.costs {
@@ -99,6 +107,9 @@ fn write_csv(writer: impl Write, bundle: &ExportBundle) -> Result<()> {
             currency: cost.currency.clone(),
             line_item: cost.line_item.clone().unwrap_or_default(),
             source_hash: String::new(),
+            status_code: 0,
+            path: String::new(),
+            request_id: String::new(),
         })?;
     }
     for chat in &bundle.chats {
@@ -123,6 +134,30 @@ fn write_csv(writer: impl Write, bundle: &ExportBundle) -> Result<()> {
             currency: "usd".to_string(),
             line_item: String::new(),
             source_hash: chat.source_hash.clone(),
+            status_code: 0,
+            path: String::new(),
+            request_id: String::new(),
+        })?;
+    }
+    for request in &bundle.live_requests {
+        csv.serialize(CsvRow {
+            kind: "live".to_string(),
+            provider: request.provider.as_str().to_string(),
+            model: request.model.clone().unwrap_or_default(),
+            start_time: request.started_at.to_rfc3339(),
+            end_time: request.finished_at.to_rfc3339(),
+            title: String::new(),
+            input_tokens: request.input_tokens,
+            output_tokens: request.output_tokens,
+            cached_input_tokens: request.cached_input_tokens,
+            requests: 1,
+            amount: 0.0,
+            currency: String::new(),
+            line_item: request.error.clone().unwrap_or_default(),
+            source_hash: String::new(),
+            status_code: request.status_code,
+            path: request.path.clone(),
+            request_id: request.request_id.clone().unwrap_or_default(),
         })?;
     }
     csv.flush()?;

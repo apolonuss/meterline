@@ -16,8 +16,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::browser::{
-    open_provider_export_page, provider_export_note, provider_export_url, provider_import_command,
-    provider_product_name,
+    open_provider_key_page, provider_key_note, provider_key_url, provider_product_name,
+    provider_proxy_base_url,
 };
 use crate::models::{Dashboard, HourlyUsageSummary, Provider, ProviderAccount};
 use crate::providers::sync_provider;
@@ -64,8 +64,7 @@ impl TuiState {
             tray_item: settings.default_tray_metric.index(),
             minimized: false,
             hide_values: settings.hide_values,
-            notice: "Start with [o] ChatGPT export or [c] Claude export, then import the zip."
-                .to_string(),
+            notice: "Start `meterline daemon`, route SDK traffic through Meterline, and watch live usage.".to_string(),
             settings,
             last_live_refresh: None,
         }
@@ -120,8 +119,14 @@ fn run_loop(
     let mut state = TuiState::from_settings(settings);
     let mut dashboard = store.dashboard()?;
     let mut last_live_poll: Option<Instant> = None;
+    let mut last_dashboard_reload = Instant::now();
 
     loop {
+        if last_dashboard_reload.elapsed() >= Duration::from_secs(1) {
+            dashboard = store.dashboard()?;
+            last_dashboard_reload = Instant::now();
+        }
+
         if live_refresh_due(&state, &dashboard, last_live_poll) {
             state.notice = "Live refresh running from official provider APIs...".to_string();
             terminal.draw(|frame| render_app(frame, &dashboard, &state, settings_path))?;
@@ -129,6 +134,7 @@ fn run_loop(
             state.last_live_refresh = Some(Utc::now());
             dashboard = store.dashboard()?;
             last_live_poll = Some(Instant::now());
+            last_dashboard_reload = Instant::now();
         }
 
         terminal.draw(|frame| render_app(frame, &dashboard, &state, settings_path))?;
@@ -184,12 +190,12 @@ fn run_loop(
                         );
                     }
                     KeyCode::Char('o') if !state.minimized => {
-                        state.selected = 4;
-                        state.notice = handle_browser_export(Provider::OpenAi);
+                        state.selected = 2;
+                        state.notice = handle_key_setup(Provider::OpenAi);
                     }
                     KeyCode::Char('c') if !state.minimized => {
-                        state.selected = 4;
-                        state.notice = handle_browser_export(Provider::Claude);
+                        state.selected = 2;
+                        state.notice = handle_key_setup(Provider::Claude);
                     }
                     KeyCode::Char('r') if !state.minimized => {
                         state.notice = sync_connected(
@@ -235,23 +241,24 @@ fn live_refresh_due(
             .unwrap_or(true)
 }
 
-fn handle_browser_export(provider: Provider) -> String {
-    let command = provider_import_command(provider);
-    match open_provider_export_page(provider) {
+fn handle_key_setup(provider: Provider) -> String {
+    match open_provider_key_page(provider) {
         Ok(url) => format!(
-            "Opened {} export page: {url}. After download, run: {command}",
-            provider_product_name(provider)
+            "Opened {} API key page: {url}. Store the key with `meterline connect {}`.",
+            provider_product_name(provider),
+            provider.as_str()
         ),
         Err(err) => format!(
-            "Could not open browser: {err:#}. Open {} then run: {command}",
-            provider_export_url(provider)
+            "Could not open browser: {err:#}. Open {} and run `meterline connect {}`.",
+            provider_key_url(provider),
+            provider.as_str()
         ),
     }
 }
 
 fn sync_connected(store: &mut Store, dashboard: &Dashboard, days: i64, label: &str) -> String {
     if dashboard.providers.is_empty() {
-        return "Nothing to sync yet. Individual users should import exports; API users can connect from the CLI.".to_string();
+        return "No stored API keys yet. Run `meterline connect openai` or `meterline connect claude`.".to_string();
     }
 
     let mut parts = Vec::new();
@@ -380,7 +387,7 @@ fn render_home(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: 
     let rows = if has_any_data(dashboard) {
         Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(8), Constraint::Min(8)])
+            .constraints([Constraint::Length(10), Constraint::Min(8)])
             .split(area)
     } else {
         Layout::default()
@@ -400,44 +407,37 @@ fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, s
     } else {
         " start here "
     };
-    let live_label = if state.settings.live_refresh {
-        "on"
-    } else {
-        "off"
-    };
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
-        Span::styled("Individual setup: ", Style::default().fg(palette.highlight)),
-        Span::styled("[o] ChatGPT export", Style::default().fg(palette.openai)),
+        Span::styled("Live setup: ", Style::default().fg(palette.highlight)),
+        Span::styled("[o] OpenAI key", Style::default().fg(palette.openai)),
         Span::raw("   "),
         Span::styled("[c] Claude", Style::default().fg(palette.claude)),
-        Span::raw(" export   "),
+        Span::raw(" key   "),
         Span::styled("[r] Sync", Style::default().fg(palette.highlight)),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Browser setup: ", Style::default().fg(palette.highlight)),
-        Span::raw("opens official export/privacy pages; import the downloaded zip"),
+        Span::styled("Run meter: ", Style::default().fg(palette.highlight)),
+        Span::raw("meterline daemon"),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Live/API data: ", Style::default().fg(palette.highlight)),
-        Span::raw(format!(
-            "optional key-based polling every 60s ({live_label}); individual accounts can use exports"
-        )),
+        Span::styled("OpenAI base: ", Style::default().fg(palette.openai)),
+        Span::raw("http://127.0.0.1:37373/openai/v1"),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Usage rhythm: ", Style::default().fg(palette.highlight)),
-        Span::raw("hourly token patterns come from imported/exported metadata, not scraping"),
+        Span::styled("Claude base: ", Style::default().fg(palette.claude)),
+        Span::raw("http://127.0.0.1:37373/anthropic/v1"),
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "meterline import chatgpt path/to/chatgpt-export.zip",
+        "Set your SDK base URL to Meterline; requests pass through and usage appears here live.",
     ));
     lines.push(Line::from(
-        "meterline import claude path/to/claude-export.zip",
+        "Optional historical sync/imports still exist, but live proxy is the main path.",
     ));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "No provider passwords. No web scraping. No message bodies stored in v1.",
+        "No browser scraping, no provider passwords, no message bodies stored.",
         Style::default().fg(palette.soft),
     )));
 
@@ -454,15 +454,25 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state:
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
         ])
         .split(area);
 
     stat_card(
         frame,
         columns[0],
+        " live ",
+        maybe_hidden(compact_number(dashboard.live_request_count), state),
+        "proxied requests",
+        palette.highlight,
+        palette,
+    );
+    stat_card(
+        frame,
+        columns[1],
         " spend ",
         maybe_hidden(format!("${:.4}", dashboard.total_cost_usd), state),
         "official cost APIs",
@@ -471,7 +481,7 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state:
     );
     stat_card(
         frame,
-        columns[1],
+        columns[2],
         " tokens ",
         maybe_hidden(
             format!(
@@ -487,10 +497,10 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state:
     );
     stat_card(
         frame,
-        columns[2],
+        columns[3],
         " freshness ",
         maybe_hidden(latest_refresh_label(dashboard, state), state),
-        "live/manual sync status",
+        "API sync status",
         palette.highlight,
         palette,
     );
@@ -531,8 +541,11 @@ fn render_models(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state
             " models ",
             vec![
                 Line::from("No model usage yet."),
-                Line::from("Press [o] or [c] to open official export pages, then import the zip."),
-                Line::from("API users can also connect from the CLI and press [r] to sync."),
+                Line::from(
+                    "Run `meterline daemon`, then route SDK traffic through the local base URL.",
+                ),
+                Line::from("OpenAI: http://127.0.0.1:37373/openai/v1"),
+                Line::from("Claude: http://127.0.0.1:37373/anthropic/v1"),
             ],
             palette,
         );
@@ -569,7 +582,7 @@ fn render_model_table(
             " models ",
             vec![
                 Line::from("No model rows yet."),
-                Line::from("Import an export zip or sync an API account to fill this table."),
+                Line::from("Live proxy requests with provider usage will fill this table."),
             ],
             palette,
         );
@@ -599,7 +612,7 @@ fn render_model_table(
         ],
     )
     .header(
-        Row::new(["Provider", "Model", "Input", "Output", "Cost", "Chats"]).style(
+        Row::new(["Provider", "Model", "Input", "Output", "Cost", "Activity"]).style(
             Style::default()
                 .fg(palette.highlight)
                 .add_modifier(Modifier::BOLD),
@@ -631,15 +644,15 @@ fn render_providers(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, pa
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(9),
-                Constraint::Length(9),
+                Constraint::Length(10),
+                Constraint::Length(10),
                 Constraint::Min(4),
             ])
             .split(area)
     } else {
         Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(9), Constraint::Min(4)])
+            .constraints([Constraint::Length(10), Constraint::Min(4)])
             .split(area)
     };
 
@@ -672,8 +685,8 @@ fn provider_card(
         Provider::Claude => "[c]",
     };
     let api_hint = match provider {
-        Provider::OpenAi => "ChatGPT export + optional OpenAI API sync",
-        Provider::Claude => "Claude export + optional API/org sync",
+        Provider::OpenAi => "OpenAI live proxy + optional Usage API sync",
+        Provider::Claude => "Claude live proxy + optional Usage API sync",
     };
     let status = if account.is_some() {
         Span::styled(
@@ -705,10 +718,11 @@ fn provider_card(
                     .fg(palette.highlight)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" to open official export page"),
+            Span::raw(" to open official API key page"),
         ]),
         Line::from(format!("Data: {api_hint}")),
-        Line::from(provider_export_note(provider)),
+        Line::from(provider_key_note(provider)),
+        Line::from(format!("Base: {}", provider_proxy_base_url(provider))),
     ];
 
     if let Some(account) = account {
@@ -724,9 +738,7 @@ fn provider_card(
                 .unwrap_or_else(|| "never".to_string())
         )));
     } else {
-        lines.push(Line::from(
-            "Sync: import exports first; API sync is optional",
-        ));
+        lines.push(Line::from("Live: route SDK traffic through Meterline"));
     }
 
     frame.render_widget(
@@ -740,14 +752,14 @@ fn provider_card(
 fn render_provider_note(frame: &mut Frame<'_>, area: Rect, palette: Palette) {
     let lines = vec![
         Line::from(vec![
-            Span::styled("Individual users: ", Style::default().fg(palette.highlight)),
-            Span::raw("use official ChatGPT/Claude exports, then import the zip."),
+            Span::styled("Live path: ", Style::default().fg(palette.highlight)),
+            Span::raw("Meterline is a local proxy for OpenAI and Anthropic API traffic."),
         ]),
         Line::from(
-            "API/org sync is optional and stays on official provider APIs; browser setup never asks for provider passwords.",
+            "Use provider API keys or pass request auth headers; Meterline stores keys in the OS keychain.",
         ),
         Line::from(
-            "Claude hourly rhythm is historical local data, not a live remaining-quota meter.",
+            "Consumer ChatGPT/Claude web SSO is not used because it does not expose official live usage scopes.",
         ),
     ];
     frame.render_widget(
@@ -767,9 +779,7 @@ fn render_chats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state:
             " chats ",
             vec![
                 Line::from("No imported chats yet."),
-                Line::from(
-                    "Export your ChatGPT or Claude data from the official product, then import the zip:",
-                ),
+                Line::from("Optional historical metadata imports can be added later with:"),
                 Line::from("meterline import chatgpt path/to/chatgpt-export.zip"),
                 Line::from("meterline import claude path/to/claude-export.zip"),
             ],
@@ -815,15 +825,15 @@ fn render_imports(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, pale
         let lines = vec![
             Line::from(vec![
                 Span::styled(
-                    "Import official exports: ",
+                    "Historical imports: ",
                     Style::default().fg(palette.highlight),
                 ),
-                Span::raw("chat metadata first, no full message bodies in v1."),
+                Span::raw("optional metadata backfill, no full message bodies in v1."),
             ]),
             Line::from(""),
             Line::from(vec![
                 Span::styled("ChatGPT", Style::default().fg(palette.openai)),
-                Span::raw(": Settings > Data Controls > Export data, then:"),
+                Span::raw(": optional archive import:"),
             ]),
             Line::from("meterline import chatgpt path/to/chatgpt-export.zip"),
             Line::from(""),
@@ -938,14 +948,14 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, state: &TuiState, settings
             "[t]",
             "Tray metric",
             settings.default_tray_metric.to_string(),
-            "spend / tokens / chats / sync",
+            "spend / tokens / live / sync",
             palette,
         ),
         setting_line(
             "[v]",
             "Live refresh",
             if settings.live_refresh { "on" } else { "off" }.to_string(),
-            "official polling every 60 seconds",
+            "optional API polling every 60 seconds",
             palette,
         ),
         Line::from(""),
@@ -993,21 +1003,21 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state
                 .fg(palette.openai)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" ChatGPT export  "),
+        Span::raw(" OpenAI key  "),
         Span::styled(
             "[c]",
             Style::default()
                 .fg(palette.claude)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" Claude export  "),
+        Span::raw(" Claude key  "),
         Span::styled(
             "[r]",
             Style::default()
                 .fg(palette.highlight)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" sync  [v] live  [g] settings  [m] mini  [q] quit"),
+        Span::raw(" sync  [v] API refresh  [g] settings  [m] mini  [q] quit"),
     ]);
     let (label, value) = tray_value(dashboard, state);
     let status = Line::from(vec![
@@ -1090,8 +1100,8 @@ fn usage_rhythm_lines(
     if rows.is_empty() {
         return vec![
             Line::from("No hourly rhythm yet."),
-            Line::from("Import a Claude or ChatGPT export to estimate tokens by hour."),
-            Line::from("Claude's live remaining quota is only visible in Claude settings."),
+            Line::from("Run `meterline daemon` and route SDK traffic through Meterline."),
+            Line::from("Hourly rows appear when providers return usage in responses."),
         ];
     }
 
@@ -1117,7 +1127,7 @@ fn usage_rhythm_lines(
             format!("Busiest {target} hours: "),
             Style::default().fg(palette.highlight),
         ),
-        Span::raw("historical tokens from imports/API buckets, shown in UTC."),
+        Span::raw("live/API tokens by request time, shown in UTC."),
     ])];
 
     for row in rows.into_iter().take(row_limit) {
@@ -1130,9 +1140,9 @@ fn usage_rhythm_lines(
         };
         let value = maybe_hidden(
             format!(
-                "{} tok, {} chats",
+                "{} tok, {} req",
                 compact_number(total),
-                compact_number(row.imported_chats)
+                compact_number(row.requests)
             ),
             state,
         );
@@ -1172,6 +1182,7 @@ fn has_any_data(dashboard: &Dashboard) -> bool {
         || !dashboard.models.is_empty()
         || !dashboard.recent_chats.is_empty()
         || !dashboard.import_runs.is_empty()
+        || dashboard.live_request_count > 0
         || dashboard.total_requests > 0
         || dashboard.imported_chats > 0
         || dashboard.total_cost_usd > 0.0
@@ -1217,7 +1228,7 @@ fn logo_line<'a>(dashboard: &Dashboard, state: &TuiState) -> Line<'a> {
         ),
         Span::raw("  "),
         Span::styled(
-            "official AI usage console",
+            "local live AI usage meter",
             Style::default().fg(palette.soft),
         ),
         Span::raw("  |  "),
@@ -1241,7 +1252,7 @@ fn tray_value(dashboard: &Dashboard, state: &TuiState) -> (&'static str, String)
             "{} total",
             compact_number(dashboard.total_input_tokens + dashboard.total_output_tokens)
         ),
-        2 => dashboard.imported_chats.to_string(),
+        2 => dashboard.live_request_count.to_string(),
         3 => latest_sync_label(dashboard, state),
         _ => String::new(),
     };
@@ -1250,7 +1261,7 @@ fn tray_value(dashboard: &Dashboard, state: &TuiState) -> (&'static str, String)
         match state.tray_item {
             0 => "Spend",
             1 => "Tokens",
-            2 => "Chats",
+            2 => "Live",
             3 => "Sync",
             _ => "Metric",
         },
@@ -1343,9 +1354,9 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let text = format!("{buffer:?}");
         assert!(text.contains("Meterline"));
-        assert!(text.contains("ChatGPT"));
+        assert!(text.contains("OpenAI"));
         assert!(text.contains("Claude"));
-        assert!(text.contains("Individual setup"));
+        assert!(text.contains("Live setup"));
         assert!(text.contains("Settings"));
     }
 

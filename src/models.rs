@@ -136,6 +136,22 @@ pub struct ImportedChat {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LiveRequest {
+    pub provider: Provider,
+    pub method: String,
+    pub path: String,
+    pub model: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub status_code: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub request_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImportRun {
     pub provider: ImportProvider,
     pub source_path: String,
@@ -173,10 +189,14 @@ pub struct Dashboard {
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
     pub total_requests: i64,
+    #[serde(default)]
+    pub live_request_count: i64,
     pub imported_chats: i64,
     pub providers: Vec<ProviderAccount>,
     pub models: Vec<ModelSummary>,
     pub recent_chats: Vec<ImportedChat>,
+    #[serde(default)]
+    pub recent_live_requests: Vec<LiveRequest>,
     pub import_runs: Vec<ImportRun>,
     #[serde(default)]
     pub hourly_usage: Vec<HourlyUsageSummary>,

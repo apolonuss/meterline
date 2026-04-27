@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::models::{
     CostBucket, Dashboard, HourlyUsageSummary, ImportProvider, ImportRun, ImportedChat,
-    ModelSummary, Provider, ProviderAccount, UsageBucket,
+    LiveRequest, ModelSummary, Provider, ProviderAccount, UsageBucket,
 };
 
 pub struct Store {
@@ -100,6 +100,21 @@ impl Store {
                 imported_count INTEGER NOT NULL,
                 skipped_count INTEGER NOT NULL,
                 ran_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS live_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                model TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL,
+                request_id TEXT,
+                error TEXT
             );
             "#,
         )
@@ -260,10 +275,65 @@ impl Store {
         Ok(run)
     }
 
+    pub fn insert_live_request(&mut self, request: &LiveRequest) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            r#"
+            INSERT INTO live_requests
+                (provider, method, path, model, started_at, finished_at, status_code,
+                 input_tokens, output_tokens, cached_input_tokens, request_id, error)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            "#,
+            params![
+                request.provider.as_str(),
+                request.method.as_str(),
+                request.path.as_str(),
+                request.model.as_deref().unwrap_or("unknown"),
+                request.started_at.to_rfc3339(),
+                request.finished_at.to_rfc3339(),
+                request.status_code,
+                request.input_tokens,
+                request.output_tokens,
+                request.cached_input_tokens,
+                request.request_id.as_deref(),
+                request.error.as_deref(),
+            ],
+        )?;
+
+        if request.input_tokens > 0 || request.output_tokens > 0 || request.cached_input_tokens > 0
+        {
+            tx.execute(
+                r#"
+                INSERT INTO usage_buckets
+                    (provider, model, start_time, end_time, input_tokens, output_tokens, cached_input_tokens, requests)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+                ON CONFLICT(provider, model, start_time, end_time) DO UPDATE SET
+                    input_tokens = excluded.input_tokens,
+                    output_tokens = excluded.output_tokens,
+                    cached_input_tokens = excluded.cached_input_tokens,
+                    requests = excluded.requests
+                "#,
+                params![
+                    request.provider.as_str(),
+                    request.model.as_deref().unwrap_or("unknown"),
+                    request.started_at.to_rfc3339(),
+                    request.finished_at.to_rfc3339(),
+                    request.input_tokens,
+                    request.output_tokens,
+                    request.cached_input_tokens,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn dashboard(&self) -> Result<Dashboard> {
         let providers = self.provider_accounts()?;
         let models = self.model_summaries()?;
         let recent_chats = self.recent_chats(12)?;
+        let recent_live_requests = self.recent_live_requests(12)?;
         let import_runs = self.import_runs(10)?;
         let hourly_usage = self.hourly_usage_summaries()?;
 
@@ -291,16 +361,21 @@ impl Store {
         let imported_chats =
             self.conn
                 .query_row("SELECT COUNT(*) FROM imported_chats", [], |row| row.get(0))?;
+        let live_request_count =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM live_requests", [], |row| row.get(0))?;
 
         Ok(Dashboard {
             total_cost_usd,
             total_input_tokens: api_input_tokens + chat_input_tokens,
             total_output_tokens: api_output_tokens + chat_output_tokens,
             total_requests,
+            live_request_count,
             imported_chats,
             providers,
             models,
             recent_chats,
+            recent_live_requests,
             import_runs,
             hourly_usage,
         })
@@ -381,6 +456,11 @@ impl Store {
                 FROM usage_buckets
                 GROUP BY provider, COALESCE(model, 'unknown')
             ),
+            live_summary AS (
+                SELECT provider, COALESCE(model, 'unknown') AS model, COUNT(*) AS live_requests
+                FROM live_requests
+                GROUP BY provider, COALESCE(model, 'unknown')
+            ),
             cost_summary AS (
                 SELECT provider, COALESCE(model, 'unknown') AS model, SUM(amount) AS cost_usd
                 FROM cost_buckets
@@ -397,13 +477,15 @@ impl Store {
             )
             SELECT provider, model,
                    SUM(input_tokens), SUM(output_tokens), SUM(cached_input_tokens), SUM(requests),
-                   SUM(cost_usd), SUM(imported_chats)
+                   SUM(cost_usd), SUM(imported_chats + live_requests)
             FROM (
-                SELECT provider, model, input_tokens, output_tokens, cached_input_tokens, requests, 0.0 AS cost_usd, 0 AS imported_chats FROM usage_summary
+                SELECT provider, model, input_tokens, output_tokens, cached_input_tokens, requests, 0.0 AS cost_usd, 0 AS imported_chats, 0 AS live_requests FROM usage_summary
                 UNION ALL
-                SELECT provider, model, 0, 0, 0, 0, cost_usd, 0 FROM cost_summary
+                SELECT provider, model, 0, 0, 0, 0, cost_usd, 0, 0 FROM cost_summary
                 UNION ALL
-                SELECT provider, model, input_tokens, output_tokens, 0, 0, cost_usd, imported_chats FROM chat_summary
+                SELECT provider, model, input_tokens, output_tokens, 0, 0, cost_usd, imported_chats, 0 FROM chat_summary
+                UNION ALL
+                SELECT provider, model, 0, 0, 0, 0, 0.0, 0, live_requests FROM live_summary
             )
             GROUP BY provider, model
             ORDER BY SUM(cost_usd) DESC, SUM(input_tokens + output_tokens) DESC, model
@@ -446,7 +528,48 @@ impl Store {
             entry.imported_chats += 1;
         }
 
+        for request in self.live_requests()? {
+            let hour = request.started_at.hour() as u8;
+            let entry = hourly_entry(&mut grouped, request.provider.as_str(), hour);
+            entry.input_tokens += request.input_tokens;
+            entry.output_tokens += request.output_tokens;
+            entry.requests += 1;
+        }
+
         Ok(grouped.into_values().collect())
+    }
+
+    pub fn live_requests(&self) -> Result<Vec<LiveRequest>> {
+        self.recent_live_requests(i64::MAX)
+    }
+
+    fn recent_live_requests(&self, limit: i64) -> Result<Vec<LiveRequest>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT provider, method, path, model, started_at, finished_at, status_code,
+                   input_tokens, output_tokens, cached_input_tokens, request_id, error
+            FROM live_requests
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(LiveRequest {
+                provider: parse_provider(row.get::<_, String>(0)?)?,
+                method: row.get(1)?,
+                path: row.get(2)?,
+                model: row.get(3)?,
+                started_at: parse_time(row.get::<_, String>(4)?)?,
+                finished_at: parse_time(row.get::<_, String>(5)?)?,
+                status_code: row.get(6)?,
+                input_tokens: row.get(7)?,
+                output_tokens: row.get(8)?,
+                cached_input_tokens: row.get(9)?,
+                request_id: row.get(10)?,
+                error: row.get(11)?,
+            })
+        })?;
+        collect_rows(rows)
     }
 
     fn recent_chats(&self, limit: i64) -> Result<Vec<ImportedChat>> {
@@ -618,5 +741,44 @@ mod tests {
         assert_eq!(row.imported_chats, 1);
         assert_eq!(dashboard.total_input_tokens, 40);
         assert_eq!(dashboard.total_output_tokens, 15);
+    }
+
+    #[test]
+    fn live_requests_feed_dashboard_and_usage() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("meterline.sqlite3"), "test-key").unwrap();
+        let started_at = Utc.with_ymd_and_hms(2026, 4, 26, 15, 0, 0).unwrap();
+        let request = LiveRequest {
+            provider: Provider::OpenAi,
+            method: "POST".to_string(),
+            path: "/v1/responses".to_string(),
+            model: Some("gpt-test".to_string()),
+            started_at,
+            finished_at: started_at + chrono::Duration::milliseconds(400),
+            status_code: 200,
+            input_tokens: 50,
+            output_tokens: 25,
+            cached_input_tokens: 10,
+            request_id: Some("req_live".to_string()),
+            error: None,
+        };
+
+        store.insert_live_request(&request).unwrap();
+
+        let dashboard = store.dashboard().unwrap();
+        assert_eq!(dashboard.live_request_count, 1);
+        assert_eq!(dashboard.total_requests, 1);
+        assert_eq!(dashboard.total_input_tokens, 50);
+        assert_eq!(dashboard.total_output_tokens, 25);
+        assert_eq!(
+            dashboard.recent_live_requests[0].request_id.as_deref(),
+            Some("req_live")
+        );
+        assert!(
+            dashboard
+                .models
+                .iter()
+                .any(|model| model.model == "gpt-test")
+        );
     }
 }

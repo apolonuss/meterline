@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::browser::{
-    open_provider_export_page, provider_export_url, provider_import_command, provider_product_name,
+    open_provider_key_page, provider_key_note, provider_key_url, provider_product_name,
+    provider_proxy_base_url,
 };
 use crate::export::{ExportFormat, export_store};
 use crate::importers::import_archive;
@@ -31,15 +32,22 @@ pub struct Cli {
 enum Command {
     /// Initialize the local database.
     Init,
-    /// Open export setup or store an optional provider API key.
+    /// Store a provider API key in the OS keychain.
     Connect {
         provider: Provider,
         #[arg(long, env)]
         key: Option<String>,
-        /// Open the official ChatGPT/Claude export page for individual users.
+        /// Open the official provider API-key page before prompting.
         #[arg(long)]
         browser: bool,
     },
+    /// Start the local always-on live usage proxy.
+    Daemon {
+        #[arg(long, default_value = "127.0.0.1:37373")]
+        bind: String,
+    },
+    /// Launch the TUI live monitor.
+    Watch,
     /// Sync official API usage and costs for connected providers.
     Sync {
         #[arg(long)]
@@ -110,28 +118,24 @@ pub fn run_cli(cli: Cli) -> Result<()> {
             browser,
         }) => {
             if browser {
-                match open_provider_export_page(provider) {
+                match open_provider_key_page(provider) {
                     Ok(url) => {
                         println!(
-                            "Opened {} export page: {url}",
+                            "Opened {} API key page: {url}",
                             provider_product_name(provider)
                         )
                     }
                     Err(err) => eprintln!(
                         "Could not open browser automatically: {err:#}\nOpen manually: {}",
-                        provider_export_url(provider)
+                        provider_key_url(provider)
                     ),
                 }
-                println!("After your export zip is ready, run:");
-                println!("{}", provider_import_command(provider));
+                println!("{}", provider_key_note(provider));
                 println!();
                 println!(
-                    "For optional API usage sync, run `meterline connect {}` without --browser.",
-                    provider.as_str()
+                    "Live base URL after `meterline daemon`: {}",
+                    provider_proxy_base_url(provider)
                 );
-                if key.is_none() {
-                    return Ok(());
-                }
             }
             let key = match key {
                 Some(value) => value,
@@ -152,6 +156,16 @@ pub fn run_cli(cli: Cli) -> Result<()> {
             SecretStore::set_provider_key(provider, key)?;
             store.upsert_provider_account(provider, provider.display_name())?;
             println!("Connected {}", provider.display_name());
+            println!("Start live tracking with: meterline daemon");
+            println!("Base URL: {}", provider_proxy_base_url(provider));
+        }
+        Some(Command::Daemon { bind }) => {
+            drop(store);
+            crate::proxy::run(crate::proxy::ProxyConfig {
+                bind,
+                database_path: paths.database_path(),
+                db_key,
+            })?;
         }
         Some(Command::Sync { provider, days }) => {
             let providers = provider
@@ -187,6 +201,7 @@ pub fn run_cli(cli: Cli) -> Result<()> {
         }
         Some(Command::Paths) => unreachable!("paths exits before opening local storage"),
         Some(Command::Support) => unreachable!("support exits before opening local storage"),
+        Some(Command::Watch) => crate::tui::run(&mut store, &paths.settings_path())?,
         None => crate::tui::run(&mut store, &paths.settings_path())?,
     }
 

@@ -3,40 +3,40 @@ use std::process::Command;
 
 use crate::models::Provider;
 
-pub fn provider_export_url(provider: Provider) -> &'static str {
+pub fn provider_key_url(provider: Provider) -> &'static str {
     match provider {
-        Provider::OpenAi => "https://chatgpt.com/#settings/DataControls",
-        Provider::Claude => "https://claude.ai/settings/privacy",
+        Provider::OpenAi => "https://platform.openai.com/api-keys",
+        Provider::Claude => "https://console.anthropic.com/settings/keys",
     }
 }
 
-pub fn provider_export_note(provider: Provider) -> &'static str {
+pub fn provider_key_note(provider: Provider) -> &'static str {
     match provider {
         Provider::OpenAi => {
-            "ChatGPT individual users can export data from Data Controls, then import the zip."
+            "Create an OpenAI API key, then Meterline can proxy OpenAI API traffic."
         }
         Provider::Claude => {
-            "Claude individual users can export data from Privacy settings, then import the zip."
+            "Create a Claude API key, then Meterline can proxy Anthropic API traffic."
         }
     }
 }
 
-pub fn provider_import_command(provider: Provider) -> &'static str {
+pub fn provider_proxy_base_url(provider: Provider) -> &'static str {
     match provider {
-        Provider::OpenAi => "meterline import chatgpt path/to/chatgpt-export.zip",
-        Provider::Claude => "meterline import claude path/to/claude-export.zip",
+        Provider::OpenAi => "http://127.0.0.1:37373/openai/v1",
+        Provider::Claude => "http://127.0.0.1:37373/anthropic/v1",
     }
 }
 
 pub fn provider_product_name(provider: Provider) -> &'static str {
     match provider {
-        Provider::OpenAi => "ChatGPT",
+        Provider::OpenAi => "OpenAI",
         Provider::Claude => "Claude",
     }
 }
 
-pub fn open_provider_export_page(provider: Provider) -> Result<&'static str> {
-    let url = provider_export_url(provider);
+pub fn open_provider_key_page(provider: Provider) -> Result<&'static str> {
+    let url = provider_key_url(provider);
     open_url(url)?;
     Ok(url)
 }
@@ -86,21 +86,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_urls_are_official_export_pages() {
+    fn provider_urls_are_official_key_pages() {
         assert_eq!(
-            provider_export_url(Provider::OpenAi),
-            "https://chatgpt.com/#settings/DataControls"
+            provider_key_url(Provider::OpenAi),
+            "https://platform.openai.com/api-keys"
         );
         assert_eq!(
-            provider_export_url(Provider::Claude),
-            "https://claude.ai/settings/privacy"
+            provider_key_url(Provider::Claude),
+            "https://console.anthropic.com/settings/keys"
         );
     }
 
     #[test]
-    fn provider_notes_explain_individual_exports() {
-        assert!(provider_export_note(Provider::OpenAi).contains("export data"));
-        assert!(provider_export_note(Provider::Claude).contains("Privacy settings"));
-        assert!(provider_import_command(Provider::Claude).contains("import claude"));
+    fn provider_notes_explain_live_proxy() {
+        assert!(provider_key_note(Provider::OpenAi).contains("proxy OpenAI"));
+        assert!(provider_key_note(Provider::Claude).contains("proxy Anthropic"));
+        assert!(provider_proxy_base_url(Provider::Claude).contains("/anthropic/v1"));
     }
 }

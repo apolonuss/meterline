@@ -1,12 +1,13 @@
 # Meterline
 
-Meterline is a fast, comfy terminal tool for tracking OpenAI/ChatGPT and Anthropic/Claude usage across models, costs, and imported chat metadata.
+Meterline is a fast, comfy terminal tool for tracking OpenAI and Anthropic usage across models, tokens, live requests, costs, and local activity.
 
 It deliberately uses official surfaces:
 
-- Official ChatGPT and Claude data-export archives for consumer chat history.
-- Optional OpenAI organization usage and cost API endpoints for API users.
-- Optional Anthropic Usage and Cost Admin API endpoints for organization API users.
+- A local OpenAI/Anthropic-compatible proxy for real-time API traffic.
+- OpenAI organization usage and cost API endpoints for optional backfill.
+- Anthropic Usage and Cost Admin API endpoints for optional organization backfill.
+- Optional official ChatGPT and Claude data-export archives for historical metadata only.
 
 Meterline does not scrape logged-in web sessions, automate provider websites, or store provider passwords.
 
@@ -18,7 +19,7 @@ If Meterline saves you time and you want to say thanks, you can send a small tip
 
 ## Status
 
-This is a v1 implementation scaffold with a working local database, CLI, TUI, importers, exports, and provider sync clients.
+This is a v1 implementation with a working local database, CLI, TUI, live proxy, imports, exports, and provider sync clients.
 
 ## Install Fast
 
@@ -66,29 +67,45 @@ cargo install --path . --locked
 ```sh
 meterline
 meterline init
-meterline connect openai --browser
-meterline connect claude --browser
-meterline import chatgpt path/to/chatgpt-export.zip
-meterline import claude path/to/claude-export.zip
+meterline connect openai
+meterline connect claude
+meterline daemon
+meterline watch
+meterline sync
 meterline export --format json
 meterline export --format csv --output meterline.csv
 meterline support
 ```
 
-Optional API usage sync for users who have provider API/admin access:
+`meterline daemon` starts the live proxy on `127.0.0.1:37373`:
 
 ```sh
-meterline connect openai
-meterline connect claude
-meterline sync
+OpenAI base URL:    http://127.0.0.1:37373/openai/v1
+Anthropic base URL: http://127.0.0.1:37373/anthropic/v1
+```
+
+Point SDKs or tools at those base URLs. Meterline forwards the request to the official provider API, streams the response back, and records provider-returned token usage when available.
+
+Open API-key pages before connecting:
+
+```sh
+meterline connect openai --browser
+meterline connect claude --browser
+```
+
+Optional historical import support remains available, but it is not the primary live path:
+
+```sh
+meterline import chatgpt path/to/chatgpt-export.zip
+meterline import claude path/to/claude-export.zip
 ```
 
 ## TUI Controls
 
-- `o` opens ChatGPT Data Controls so individual users can export their official data zip.
-- `c` opens Claude Privacy settings so individual users can export their official data zip.
+- `o` opens the OpenAI API-key page.
+- `c` opens the Claude API-key page.
 - `r` runs a manual provider sync for optional API-connected accounts.
-- `v` toggles live refresh, which polls official authenticated usage APIs every 60 seconds when providers are connected.
+- `v` toggles optional API refresh polling every 60 seconds when providers are connected.
 - `g` opens Settings.
 - `m` toggles minimized mode.
 - `s` hides or shows usage values for privacy and saves the preference.
@@ -98,7 +115,7 @@ meterline sync
 
 Meterline stays terminal-native in v1. The tray is a compact in-terminal status strip rather than an operating-system system tray process, which keeps installation light and predictable across Windows, macOS, and Linux.
 
-Browser setup is browser-assisted, not browser-scraping: Meterline opens official export/settings pages and never reads browser cookies, sessions, or passwords.
+Browser setup is browser-assisted, not browser-scraping: Meterline opens official API-key pages and never reads browser cookies, sessions, or passwords.
 
 ## Customization
 
@@ -107,7 +124,7 @@ Open the Settings panel with `g`. Meterline saves simple preferences to `setting
 - Theme: `balanced`, `openai`, `claude`, or `mono`.
 - Manual sync window: `7`, `31`, or `90` days.
 - Startup panel: `home`, `providers`, `chats`, or `imports`.
-- Value privacy, default tray metric, and live refresh on/off.
+- Value privacy, default tray metric, and optional API refresh on/off.
 
 ## Storage and Privacy
 
@@ -121,21 +138,27 @@ cargo install --git https://github.com/apolonuss/meterline --locked --no-default
 
 On Windows, the SQLCipher build uses vendored OpenSSL and requires Perl in addition to the normal Rust/MSVC build tools. The default installer does not require this.
 
-Imported chat history is metadata-first in v1. Meterline stores titles, timestamps, provider, model hints, estimated token counts, source hashes, and optional short snippets. It does not store full message bodies.
+Live proxy activity is metadata-first. Meterline stores provider, endpoint, timestamps, status code, model, request ID, and token counts returned by the provider. It does not store full request or response bodies.
 
-The Models panel also shows a usage rhythm by hour. For individual ChatGPT and Claude users this is based on imported export metadata and estimated tokens. For API users it also includes synced usage buckets when available. This is a historical usage pattern, not a live remaining-quota meter.
+Imported chat history is also metadata-first when used. Meterline stores titles, timestamps, provider, model hints, estimated token counts, source hashes, and optional short snippets. It does not store full message bodies.
+
+The Models panel shows usage rhythm by hour. For live proxy traffic this is based on provider-returned usage in real time. For optional API sync it includes synced usage buckets too.
 
 Set `METERLINE_HOME` to override the app data directory, which is useful for tests and portable installs.
 
 ## Provider Notes
 
-Individual users should start with official exports:
+Start live:
 
-- ChatGPT: `meterline connect openai --browser`, export from Data Controls, then `meterline import chatgpt <zip>`.
-- Claude: `meterline connect claude --browser`, export from Privacy settings, then `meterline import claude <zip>`.
+```sh
+meterline connect openai
+meterline connect claude
+meterline daemon
+meterline watch
+```
 
-Optional API sync is separate. OpenAI usage sync expects an API key with access to organization usage and costs. Anthropic API usage sync expects an Admin API key and organization access. Individual Claude users do not need Anthropic Admin API access to use Meterline with exports.
+Meterline can also forward incoming request auth headers, so tools may keep using their own API keys while Meterline acts as the local base URL.
 
-Live refresh uses official authenticated API polling. It does not use provider web sessions, passwords, scraping, or local webhooks. Provider reporting can lag behind actual usage, so Meterline shows the last refresh time in the TUI.
+Optional API sync is separate. OpenAI usage sync expects an API key with access to organization usage and costs. Anthropic usage/cost sync expects an Admin API key and organization access. The live proxy path does not require Anthropic Admin API access; it tracks requests that pass through Meterline.
 
-Claude's own usage limit can vary by plan, model, message length, attachments, current conversation length, features, and provider capacity. Claude exposes usage progress to signed-in paid users in Claude settings, but Meterline does not scrape that page. Meterline shows your imported/synced usage by hour so you can see when you tend to spend tokens.
+Consumer ChatGPT/Claude web SSO is not used because it does not expose official delegated scopes for terminal apps to read live usage, chats, or remaining quota. Meterline stays honest: real-time tracking works for API traffic routed through the local proxy. Claude's own usage limit can vary by plan, model, message length, attachments, current conversation length, features, and provider capacity; Meterline does not scrape Claude settings.

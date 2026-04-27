@@ -190,7 +190,7 @@ impl Display for TrayMetric {
         f.write_str(match self {
             TrayMetric::Spend => "spend",
             TrayMetric::Tokens => "tokens",
-            TrayMetric::Chats => "chats",
+            TrayMetric::Chats => "live",
             TrayMetric::Sync => "sync",
         })
     }
