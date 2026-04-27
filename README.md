@@ -117,6 +117,8 @@ meterline import claude path/to/claude-export.zip
 - `h`/`l`, left/right, or `1`-`7` switch panels.
 - `q` quits.
 
+Home stays focused on connected providers only. If Claude is connected and OpenAI is not, the main meter shows Claude, live requests, tokens, latest activity, and a compact token graph. Add another provider later from the Providers panel.
+
 Meterline stays terminal-native in v1. The tray is a compact in-terminal status strip rather than an operating-system system tray process, which keeps installation light and predictable across Windows, macOS, and Linux.
 
 Browser setup is browser-assisted, not browser-scraping: Meterline opens official API-key pages and never reads browser cookies, sessions, or passwords.
@@ -146,7 +148,7 @@ Live proxy activity is metadata-first. Meterline stores provider, endpoint, time
 
 Imported chat history is also metadata-first when used. Meterline stores titles, timestamps, provider, model hints, estimated token counts, source hashes, and optional short snippets. It does not store full message bodies.
 
-The Models panel shows usage rhythm by hour. For live proxy traffic this is based on provider-returned usage in real time. For optional API sync it includes synced usage buckets too.
+Home shows a compact token graph for the active connected provider. The Models panel also shows usage rhythm by hour. For live proxy traffic this is based on provider-returned usage in real time. For optional API sync it includes synced usage buckets too.
 
 Set `METERLINE_HOME` to override the app data directory, which is useful for tests and portable installs.
 

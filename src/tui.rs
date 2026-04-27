@@ -65,7 +65,9 @@ impl TuiState {
             tray_item: settings.default_tray_metric.index(),
             minimized: false,
             hide_values: settings.hide_values,
-            notice: "Start `meterline daemon`, route SDK traffic through Meterline, and watch live usage.".to_string(),
+            notice:
+                "Live meter ready. Connect a provider, then route SDK traffic through Meterline."
+                    .to_string(),
             settings,
             last_live_refresh: None,
         }
@@ -121,6 +123,7 @@ fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.clear()?;
     Ok(())
 }
 
@@ -458,65 +461,63 @@ fn render_minimized(frame: &mut Frame<'_>, dashboard: &Dashboard, state: &TuiSta
 }
 
 fn render_home(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
-    let rows = if has_any_data(dashboard) {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(10), Constraint::Min(8)])
-            .split(area)
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(11), Constraint::Min(7)])
-            .split(area)
-    };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Min(6),
+        ])
+        .split(area);
 
     render_start_here(frame, rows[0], dashboard, state);
     render_stats(frame, rows[1], dashboard, state);
+    render_live_graph(frame, rows[2], dashboard, state);
 }
 
 fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
     let palette = state.palette();
-    let title = if has_any_data(dashboard) {
-        " next actions "
+    let providers = connected_provider_list(dashboard);
+    let title = if providers.is_empty() {
+        " setup "
     } else {
-        " start here "
+        " live meter "
     };
     let mut lines = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled("Live setup: ", Style::default().fg(palette.highlight)),
-        Span::styled("[o] OpenAI key", Style::default().fg(palette.openai)),
-        Span::raw("   "),
-        Span::styled("[c] Claude", Style::default().fg(palette.claude)),
-        Span::raw(" key + paste   "),
-        Span::styled("[r] Sync", Style::default().fg(palette.highlight)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Run meter: ", Style::default().fg(palette.highlight)),
-        Span::raw("meterline daemon"),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("OpenAI base: ", Style::default().fg(palette.openai)),
-        Span::raw("http://127.0.0.1:37373/openai/v1"),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Claude base: ", Style::default().fg(palette.claude)),
-        Span::raw("http://127.0.0.1:37373/anthropic/v1"),
-    ]));
-    lines.push(Line::from(""));
-    lines.push(Line::from(
-        "After [o]/[c], paste the provider API key into the terminal prompt.",
-    ));
-    lines.push(Line::from(
-        "Set your SDK base URL to Meterline; usage appears here live.",
-    ));
-    lines.push(Line::from(
-        "Optional historical sync/imports still exist, but live proxy is the main path.",
-    ));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "No browser scraping, no provider passwords, no message bodies stored.",
-        Style::default().fg(palette.soft),
-    )));
+
+    if providers.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Connect: ", Style::default().fg(palette.highlight)),
+            Span::styled("[c] Claude", Style::default().fg(palette.claude)),
+            Span::raw(" or "),
+            Span::styled("[o] OpenAI", Style::default().fg(palette.openai)),
+            Span::raw(". Paste the API key when prompted."),
+        ]));
+        lines.push(Line::from(
+            "Then point your SDK/tool at the Meterline base URL.",
+        ));
+        lines.push(Line::from(
+            "No browser scraping, provider passwords, or message body storage.",
+        ));
+    } else {
+        for provider in providers {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    provider.display_name(),
+                    Style::default()
+                        .fg(provider_color(provider, palette))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" connected  "),
+                Span::styled("base: ", Style::default().fg(palette.soft)),
+                Span::raw(provider_proxy_base_url(provider)),
+            ]));
+        }
+        lines.push(Line::from(
+            "Route requests through the base URL above; usage updates here.",
+        ));
+        lines.push(Line::from("Add another provider from the Providers panel."));
+    }
 
     frame.render_widget(
         Paragraph::new(lines)
@@ -531,10 +532,9 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state:
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
         ])
         .split(area);
 
@@ -550,15 +550,6 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state:
     stat_card(
         frame,
         columns[1],
-        " spend ",
-        maybe_hidden(format!("${:.4}", dashboard.total_cost_usd), state),
-        "official cost APIs",
-        palette.claude,
-        palette,
-    );
-    stat_card(
-        frame,
-        columns[2],
         " tokens ",
         maybe_hidden(
             format!(
@@ -574,12 +565,23 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state:
     );
     stat_card(
         frame,
-        columns[3],
-        " freshness ",
-        maybe_hidden(latest_refresh_label(dashboard, state), state),
-        "API sync status",
-        palette.highlight,
+        columns[2],
+        " last ",
+        maybe_hidden(latest_activity_label(dashboard, state), state),
+        "latest activity",
+        palette.value,
         palette,
+    );
+}
+
+fn render_live_graph(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
+    let palette = state.palette();
+    let lines = live_graph_lines(dashboard, state, palette);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel_block(" token graph ", palette))
+            .wrap(Wrap { trim: true }),
+        area,
     );
 }
 
@@ -717,35 +719,51 @@ fn render_usage_rhythm(
 }
 
 fn render_providers(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, palette: Palette) {
-    let layout = if area.width < 88 {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(10),
-                Constraint::Length(10),
-                Constraint::Min(4),
-            ])
-            .split(area)
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(10), Constraint::Min(4)])
-            .split(area)
-    };
+    let providers = connected_provider_list(dashboard);
+    if providers.is_empty() {
+        render_provider_setup(frame, area, palette);
+        return;
+    }
 
-    if area.width < 88 {
-        provider_card(frame, layout[0], dashboard, Provider::OpenAi, palette);
-        provider_card(frame, layout[1], dashboard, Provider::Claude, palette);
-        render_provider_note(frame, layout[2], palette);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(10), Constraint::Min(4)])
+        .split(area);
+
+    if providers.len() == 1 || area.width < 88 {
+        provider_card(frame, layout[0], dashboard, providers[0], palette);
     } else {
         let cards = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(layout[0]);
-        provider_card(frame, cards[0], dashboard, Provider::OpenAi, palette);
-        provider_card(frame, cards[1], dashboard, Provider::Claude, palette);
-        render_provider_note(frame, layout[1], palette);
+        for (index, provider) in providers.iter().copied().take(2).enumerate() {
+            provider_card(frame, cards[index], dashboard, provider, palette);
+        }
     }
+    render_provider_note(frame, layout[1], dashboard, palette);
+}
+
+fn render_provider_setup(frame: &mut Frame<'_>, area: Rect, palette: Palette) {
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("[c] Claude", Style::default().fg(palette.claude)),
+            Span::raw("  connect and paste API key"),
+        ]),
+        Line::from(vec![
+            Span::styled("[o] OpenAI", Style::default().fg(palette.openai)),
+            Span::raw("  add later if you need ChatGPT/API tracking"),
+        ]),
+        Line::from(""),
+        Line::from("After connecting, set your SDK base URL to the provider's Meterline URL."),
+        Line::from("Connected providers are the only ones shown on the main meter."),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel_block(" provider setup ", palette))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 fn provider_card(
@@ -826,22 +844,36 @@ fn provider_card(
     );
 }
 
-fn render_provider_note(frame: &mut Frame<'_>, area: Rect, palette: Palette) {
-    let lines = vec![
+fn render_provider_note(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    dashboard: &Dashboard,
+    palette: Palette,
+) {
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("Live path: ", Style::default().fg(palette.highlight)),
-            Span::raw("Meterline is a local proxy for OpenAI and Anthropic API traffic."),
+            Span::raw(
+                "route API calls through Meterline; only metadata and provider token counts are stored.",
+            ),
         ]),
-        Line::from(
-            "Use provider API keys or pass request auth headers; Meterline stores keys in the OS keychain.",
-        ),
-        Line::from(
-            "Consumer ChatGPT/Claude web SSO is not used because it does not expose official live usage scopes.",
-        ),
+        Line::from("Keys are kept in the OS keychain. Request and response bodies are not stored."),
     ];
+    let missing = missing_providers(dashboard);
+    if !missing.is_empty() {
+        let names = missing
+            .iter()
+            .map(|provider| match provider {
+                Provider::OpenAi => "[o] OpenAI",
+                Provider::Claude => "[c] Claude",
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        lines.push(Line::from(format!("Add another provider: {names}")));
+    }
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" official paths ", palette))
+            .block(panel_block(" live path ", palette))
             .wrap(Wrap { trim: true }),
         area,
     );
@@ -1073,29 +1105,34 @@ fn setting_line(
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, state: &TuiState) {
     let palette = state.palette();
-    let shortcuts = Line::from(vec![
-        Span::styled(
-            "[o]",
-            Style::default()
-                .fg(palette.openai)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" OpenAI key  "),
-        Span::styled(
-            "[c]",
-            Style::default()
-                .fg(palette.claude)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" Claude key  "),
-        Span::styled(
-            "[r]",
-            Style::default()
-                .fg(palette.highlight)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" sync  [v] API refresh  [g] settings  [m] mini  [q] quit"),
-    ]);
+    let shortcuts = if dashboard.providers.is_empty() {
+        Line::from(vec![
+            Span::styled(
+                "[c]",
+                Style::default()
+                    .fg(palette.claude)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Claude  "),
+            Span::styled(
+                "[o]",
+                Style::default()
+                    .fg(palette.openai)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" OpenAI  [g] settings  [q] quit"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                "[r]",
+                Style::default()
+                    .fg(palette.highlight)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" sync  [2] providers  [g] settings  [m] mini  [q] quit"),
+        ])
+    };
     let (label, value) = tray_value(dashboard, state);
     let status = Line::from(vec![
         Span::styled(
@@ -1151,6 +1188,97 @@ fn style_for_provider_text(value: &str, palette: Palette) -> Style {
         "claude" | "anthropic" => Style::default().fg(palette.claude),
         _ => Style::default(),
     }
+}
+
+fn live_graph_lines(
+    dashboard: &Dashboard,
+    state: &TuiState,
+    palette: Palette,
+) -> Vec<Line<'static>> {
+    let Some(provider) = graph_provider(dashboard) else {
+        return vec![
+            Line::from("No provider connected."),
+            Line::from("Press [c] for Claude or [o] for OpenAI."),
+        ];
+    };
+
+    let mut values = [0_i64; 24];
+    for row in &dashboard.hourly_usage {
+        if row.provider == provider.as_str() {
+            values[row.hour_utc as usize] += total_hourly_tokens(row);
+        }
+    }
+
+    let total: i64 = values.iter().sum();
+    let accent = provider_color(provider, palette);
+    if total == 0 {
+        return vec![
+            Line::from(vec![
+                Span::styled(
+                    provider.display_name(),
+                    Style::default().fg(accent).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" connected"),
+            ]),
+            Line::from("No live usage yet. Send an API request through:"),
+            Line::from(provider_proxy_base_url(provider)),
+        ];
+    }
+
+    let peak = values
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, value)| *value)
+        .map(|(hour, value)| (hour, *value))
+        .unwrap_or((0, 0));
+    let graph = if state.hide_values {
+        "hidden".to_string()
+    } else {
+        sparkline(&values)
+    };
+    let total_label = maybe_hidden(format!("{} tokens", compact_number(total)), state);
+    let peak_label = maybe_hidden(
+        format!("{:02}:00 UTC, {}", peak.0, compact_number(peak.1)),
+        state,
+    );
+
+    vec![
+        Line::from(vec![
+            Span::styled(
+                provider.display_name(),
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" token graph by UTC hour"),
+        ]),
+        Line::from(Span::styled(graph, Style::default().fg(accent))),
+        Line::from(vec![
+            Span::styled("Total: ", Style::default().fg(palette.soft)),
+            Span::styled(total_label, Style::default().fg(palette.value)),
+            Span::raw("   "),
+            Span::styled("Peak: ", Style::default().fg(palette.soft)),
+            Span::styled(peak_label, Style::default().fg(palette.value)),
+        ]),
+    ]
+}
+
+fn sparkline(values: &[i64; 24]) -> String {
+    let max = values.iter().copied().max().unwrap_or(0);
+    if max <= 0 {
+        return ".".repeat(24);
+    }
+    let levels = ['.', ':', '-', '=', '+', '*', '#', '%', '@'];
+    values
+        .iter()
+        .map(|value| {
+            if *value <= 0 {
+                '.'
+            } else {
+                let index = ((*value * (levels.len() as i64 - 1) + max - 1) / max)
+                    .clamp(1, levels.len() as i64 - 1) as usize;
+                levels[index]
+            }
+        })
+        .collect()
 }
 
 fn usage_rhythm_lines(
@@ -1254,15 +1382,34 @@ fn provider_name_from_str(value: &str) -> &'static str {
     }
 }
 
-fn has_any_data(dashboard: &Dashboard) -> bool {
-    !dashboard.providers.is_empty()
-        || !dashboard.models.is_empty()
-        || !dashboard.recent_chats.is_empty()
-        || !dashboard.import_runs.is_empty()
-        || dashboard.live_request_count > 0
-        || dashboard.total_requests > 0
-        || dashboard.imported_chats > 0
-        || dashboard.total_cost_usd > 0.0
+fn connected_provider_list(dashboard: &Dashboard) -> Vec<Provider> {
+    [Provider::Claude, Provider::OpenAi]
+        .into_iter()
+        .filter(|provider| provider_account(dashboard, *provider).is_some())
+        .collect()
+}
+
+fn missing_providers(dashboard: &Dashboard) -> Vec<Provider> {
+    [Provider::Claude, Provider::OpenAi]
+        .into_iter()
+        .filter(|provider| provider_account(dashboard, *provider).is_none())
+        .collect()
+}
+
+fn graph_provider(dashboard: &Dashboard) -> Option<Provider> {
+    let providers = connected_provider_list(dashboard);
+    if providers.len() == 1 {
+        return providers.first().copied();
+    }
+
+    providers.into_iter().max_by_key(|provider| {
+        dashboard
+            .hourly_usage
+            .iter()
+            .filter(|row| row.provider == provider.as_str())
+            .map(total_hourly_tokens)
+            .sum::<i64>()
+    })
 }
 
 fn compact_number(value: i64) -> String {
@@ -1346,11 +1493,18 @@ fn tray_value(dashboard: &Dashboard, state: &TuiState) -> (&'static str, String)
     )
 }
 
-fn latest_refresh_label(dashboard: &Dashboard, state: &TuiState) -> String {
-    if let Some(value) = state.last_live_refresh {
-        return format!("live {}", value.format("%H:%M:%S"));
-    }
-    latest_sync_label(dashboard, state)
+fn latest_activity_label(dashboard: &Dashboard, _state: &TuiState) -> String {
+    dashboard
+        .recent_live_requests
+        .first()
+        .map(|request| {
+            format!(
+                "{} {}",
+                request.provider.display_name(),
+                request.started_at.format("%H:%M:%S")
+            )
+        })
+        .unwrap_or_else(|| "waiting".to_string())
 }
 
 fn latest_sync_label(dashboard: &Dashboard, _state: &TuiState) -> String {
@@ -1433,8 +1587,29 @@ mod tests {
         assert!(text.contains("Meterline"));
         assert!(text.contains("OpenAI"));
         assert!(text.contains("Claude"));
-        assert!(text.contains("Live setup"));
+        assert!(text.contains("Connect"));
         assert!(text.contains("Settings"));
+    }
+
+    #[test]
+    fn connected_claude_home_does_not_show_openai_setup() {
+        let backend = TestBackend::new(120, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let dashboard = Dashboard {
+            providers: vec![ProviderAccount {
+                provider: Provider::Claude,
+                label: "Claude".to_string(),
+                connected_at: Utc::now(),
+                last_synced_at: None,
+            }],
+            ..Dashboard::default()
+        };
+        terminal.draw(|frame| render(frame, &dashboard, 0)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = format!("{buffer:?}");
+        assert!(text.contains("Claude"));
+        assert!(!text.contains("OpenAI base"));
+        assert!(!text.contains("OpenAI key"));
     }
 
     #[test]
