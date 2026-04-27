@@ -46,6 +46,11 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1:37373")]
         bind: String,
     },
+    /// Start the live proxy and TUI in one terminal.
+    Live {
+        #[arg(long, default_value = "127.0.0.1:37373")]
+        bind: String,
+    },
     /// Launch the TUI live monitor.
     Watch,
     /// Sync official API usage and costs for connected providers.
@@ -156,7 +161,7 @@ pub fn run_cli(cli: Cli) -> Result<()> {
             SecretStore::set_provider_key(provider, key)?;
             store.upsert_provider_account(provider, provider.display_name())?;
             println!("Connected {}", provider.display_name());
-            println!("Start live tracking with: meterline daemon");
+            println!("Start live tracking with: meterline");
             println!("Base URL: {}", provider_proxy_base_url(provider));
         }
         Some(Command::Daemon { bind }) => {
@@ -166,6 +171,9 @@ pub fn run_cli(cli: Cli) -> Result<()> {
                 database_path: paths.database_path(),
                 db_key,
             })?;
+        }
+        Some(Command::Live { bind }) => {
+            run_live_tui(&mut store, &paths, &db_key, bind)?;
         }
         Some(Command::Sync { provider, days }) => {
             let providers = provider
@@ -202,10 +210,29 @@ pub fn run_cli(cli: Cli) -> Result<()> {
         Some(Command::Paths) => unreachable!("paths exits before opening local storage"),
         Some(Command::Support) => unreachable!("support exits before opening local storage"),
         Some(Command::Watch) => crate::tui::run(&mut store, &paths.settings_path())?,
-        None => crate::tui::run(&mut store, &paths.settings_path())?,
+        None => {
+            run_live_tui(&mut store, &paths, &db_key, "127.0.0.1:37373".to_string())?;
+        }
     }
 
     Ok(())
+}
+
+fn run_live_tui(store: &mut Store, paths: &AppPaths, db_key: &str, bind: String) -> Result<()> {
+    match crate::proxy::spawn(crate::proxy::ProxyConfig {
+        bind: bind.clone(),
+        database_path: paths.database_path(),
+        db_key: db_key.to_string(),
+    }) {
+        Ok(handle) => {
+            eprintln!("Meterline live proxy is running on http://{}", handle.bind);
+        }
+        Err(err) => {
+            eprintln!("Meterline live proxy was not started: {err:#}");
+            eprintln!("If another Meterline window is already running, this is usually fine.");
+        }
+    }
+    crate::tui::run(store, &paths.settings_path())
 }
 
 #[cfg(test)]

@@ -24,6 +24,11 @@ pub struct ProxyConfig {
     pub db_key: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct ProxyHandle {
+    pub bind: String,
+}
+
 #[derive(Debug)]
 struct HttpRequest {
     method: String,
@@ -48,15 +53,30 @@ pub fn run(config: ProxyConfig) -> Result<()> {
     println!("Anthropic base URL: http://{}/anthropic/v1", config.bind);
     println!("Use Ctrl+C to stop.");
 
-    let client = Client::builder()
-        .user_agent(format!("Meterline/{}", env!("CARGO_PKG_VERSION")))
-        .no_gzip()
-        .no_brotli()
-        .no_deflate()
-        .timeout(Duration::from_secs(600))
-        .build()
-        .context("could not create proxy HTTP client")?;
+    let client = proxy_client()?;
 
+    accept_loop(listener, config, client)
+}
+
+pub fn spawn(config: ProxyConfig) -> Result<ProxyHandle> {
+    let listener = TcpListener::bind(&config.bind)
+        .with_context(|| format!("could not bind {}", config.bind))?;
+    let client = proxy_client()?;
+    let bind = config.bind.clone();
+
+    thread::Builder::new()
+        .name("meterline-live-proxy".to_string())
+        .spawn(move || {
+            if let Err(err) = accept_loop(listener, config, client) {
+                eprintln!("meterline live proxy stopped: {err:#}");
+            }
+        })
+        .context("could not start live proxy thread")?;
+
+    Ok(ProxyHandle { bind })
+}
+
+fn accept_loop(listener: TcpListener, config: ProxyConfig, client: Client) -> Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -72,6 +92,17 @@ pub fn run(config: ProxyConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn proxy_client() -> Result<Client> {
+    Client::builder()
+        .user_agent(format!("Meterline/{}", env!("CARGO_PKG_VERSION")))
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .timeout(Duration::from_secs(600))
+        .build()
+        .context("could not create proxy HTTP client")
 }
 
 fn handle_connection(mut stream: TcpStream, config: ProxyConfig, client: Client) -> Result<()> {

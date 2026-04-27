@@ -21,6 +21,7 @@ use crate::browser::{
 };
 use crate::models::{Dashboard, HourlyUsageSummary, Provider, ProviderAccount};
 use crate::providers::sync_provider;
+use crate::secrets::SecretStore;
 use crate::settings::{AppSettings, Theme};
 use crate::store::Store;
 
@@ -110,6 +111,19 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
+fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    Ok(())
+}
+
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     store: &mut Store,
@@ -191,11 +205,15 @@ fn run_loop(
                     }
                     KeyCode::Char('o') if !state.minimized => {
                         state.selected = 2;
-                        state.notice = handle_key_setup(Provider::OpenAi);
+                        state.notice = connect_provider(terminal, store, Provider::OpenAi);
+                        dashboard = store.dashboard()?;
+                        last_live_poll = None;
                     }
                     KeyCode::Char('c') if !state.minimized => {
                         state.selected = 2;
-                        state.notice = handle_key_setup(Provider::Claude);
+                        state.notice = connect_provider(terminal, store, Provider::Claude);
+                        dashboard = store.dashboard()?;
+                        last_live_poll = None;
                     }
                     KeyCode::Char('r') if !state.minimized => {
                         state.notice = sync_connected(
@@ -241,19 +259,75 @@ fn live_refresh_due(
             .unwrap_or(true)
 }
 
-fn handle_key_setup(provider: Provider) -> String {
-    match open_provider_key_page(provider) {
-        Ok(url) => format!(
-            "Opened {} API key page: {url}. Store the key with `meterline connect {}`.",
-            provider_product_name(provider),
-            provider.as_str()
-        ),
-        Err(err) => format!(
-            "Could not open browser: {err:#}. Open {} and run `meterline connect {}`.",
-            provider_key_url(provider),
-            provider.as_str()
-        ),
+fn connect_provider(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    store: &mut Store,
+    provider: Provider,
+) -> String {
+    if let Err(err) = suspend_terminal(terminal) {
+        return format!(
+            "Could not open {} connect prompt: {err:#}",
+            provider.display_name()
+        );
     }
+
+    let result = connect_provider_prompt(store, provider);
+
+    if let Err(err) = resume_terminal(terminal) {
+        return format!(
+            "Could not return to Meterline after {} connect prompt: {err:#}",
+            provider.display_name()
+        );
+    }
+
+    match result {
+        Ok(message) => message,
+        Err(err) => format!("Could not connect {}: {err:#}", provider.display_name()),
+    }
+}
+
+fn connect_provider_prompt(store: &mut Store, provider: Provider) -> Result<String> {
+    println!("Meterline connect {}", provider.display_name());
+    println!();
+    println!("Meterline stores API keys in your OS keychain.");
+    println!("It never asks for provider passwords or browser sessions.");
+    println!("{}", provider_key_note(provider));
+    println!();
+    match open_provider_key_page(provider) {
+        Ok(url) => println!(
+            "Opened official {} key page: {url}",
+            provider_product_name(provider)
+        ),
+        Err(err) => {
+            println!("Could not open your browser automatically: {err:#}");
+            println!("Open this page manually: {}", provider_key_url(provider));
+        }
+    }
+    println!();
+    println!("Next: create or copy your API key, paste it below, then press Enter.");
+    println!("Leave it blank to cancel.");
+    println!();
+
+    let key = rpassword::prompt_password(format!("Paste {} API key: ", provider.display_name()))?;
+    let key = key.trim();
+    if key_was_cancelled(key) {
+        return Ok(format!(
+            "{} connection cancelled. No key was stored.",
+            provider.display_name()
+        ));
+    }
+
+    SecretStore::set_provider_key(provider, key)?;
+    store.upsert_provider_account(provider, provider.display_name())?;
+    Ok(format!(
+        "{} connected. Keep using {} for live tracking.",
+        provider.display_name(),
+        provider_proxy_base_url(provider)
+    ))
+}
+
+fn key_was_cancelled(key: &str) -> bool {
+    key.trim().is_empty() || key.trim() == "\u{1b}"
 }
 
 fn sync_connected(store: &mut Store, dashboard: &Dashboard, days: i64, label: &str) -> String {
@@ -413,7 +487,7 @@ fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, s
         Span::styled("[o] OpenAI key", Style::default().fg(palette.openai)),
         Span::raw("   "),
         Span::styled("[c] Claude", Style::default().fg(palette.claude)),
-        Span::raw(" key   "),
+        Span::raw(" key + paste   "),
         Span::styled("[r] Sync", Style::default().fg(palette.highlight)),
     ]));
     lines.push(Line::from(vec![
@@ -430,7 +504,10 @@ fn render_start_here(frame: &mut Frame<'_>, area: Rect, dashboard: &Dashboard, s
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "Set your SDK base URL to Meterline; requests pass through and usage appears here live.",
+        "After [o]/[c], paste the provider API key into the terminal prompt.",
+    ));
+    lines.push(Line::from(
+        "Set your SDK base URL to Meterline; usage appears here live.",
     ));
     lines.push(Line::from(
         "Optional historical sync/imports still exist, but live proxy is the main path.",
@@ -718,7 +795,7 @@ fn provider_card(
                     .fg(palette.highlight)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" to open official API key page"),
+            Span::raw(" to open the key page, then paste the key"),
         ]),
         Line::from(format!("Data: {api_hint}")),
         Line::from(provider_key_note(provider)),

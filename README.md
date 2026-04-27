@@ -69,6 +69,7 @@ meterline
 meterline init
 meterline connect openai
 meterline connect claude
+meterline live
 meterline daemon
 meterline watch
 meterline sync
@@ -77,7 +78,9 @@ meterline export --format csv --output meterline.csv
 meterline support
 ```
 
-`meterline daemon` starts the live proxy on `127.0.0.1:37373`:
+`meterline` and `meterline live` run the live proxy and TUI together in one terminal. `meterline daemon` is available for headless/advanced setups.
+
+The live proxy listens on `127.0.0.1:37373`:
 
 ```sh
 OpenAI base URL:    http://127.0.0.1:37373/openai/v1
@@ -104,6 +107,7 @@ meterline import claude path/to/claude-export.zip
 
 - `o` opens the OpenAI API-key page.
 - `c` opens the Claude API-key page.
+- After `o` or `c`, Meterline prompts you to paste the API key and stores it in the OS keychain.
 - `r` runs a manual provider sync for optional API-connected accounts.
 - `v` toggles optional API refresh polling every 60 seconds when providers are connected.
 - `g` opens Settings.
@@ -153,8 +157,7 @@ Start live:
 ```sh
 meterline connect openai
 meterline connect claude
-meterline daemon
-meterline watch
+meterline
 ```
 
 Meterline can also forward incoming request auth headers, so tools may keep using their own API keys while Meterline acts as the local base URL.
